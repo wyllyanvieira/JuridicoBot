@@ -171,11 +171,6 @@ client.on("interactionCreate", async (interaction) => {
           });
 
           try {
-            // bloquear envio de mensagens por default
-            await thread.permissionOverwrites
-              .edit(thread.guild.roles.everyone, { SendMessages: false })
-              .catch(() => null);
-
             await updatePanelMessage(thread, updated);
           } catch (e) {
             console.error("panel create error", e);
