@@ -16,6 +16,50 @@ function priorityEmoji(priority) {
   return map[priority] || '🟨';
 }
 
+const PARTICIPANT_LABELS = {
+  judge: 'Juiz',
+  author: 'Advogado Polo Ativo',
+  passive: 'Advogado Polo Passivo'
+};
+
+function formatParticipantValue(value) {
+  if (!value) return '—';
+  if (typeof value === 'object' && value !== null) {
+    if (value.id) {
+      const mention = `<@${value.id}>`;
+      return value.tag ? `${mention} (${value.tag})` : mention;
+    }
+    if (value.mention) return value.mention;
+    if (value.name) return value.name;
+  }
+  return String(value);
+}
+
+function formatParticipants(participants = {}) {
+  const entries = [];
+  const handledKeys = new Set();
+  for (const key of Object.keys(PARTICIPANT_LABELS)) {
+    if (participants[key]) {
+      entries.push([key, participants[key]]);
+      handledKeys.add(key);
+    }
+  }
+  for (const [key, value] of Object.entries(participants)) {
+    if (!handledKeys.has(key)) {
+      entries.push([key, value]);
+    }
+  }
+
+  if (!entries.length) return '—';
+
+  return entries
+    .map(([key, value]) => {
+      const label = PARTICIPANT_LABELS[key] || key;
+      return `**${label}**: ${formatParticipantValue(value)}`;
+    })
+    .join('\n');
+}
+
 function buildCaseEmbed(caseRow) {
   const data = Object.assign({}, caseRow);
   // Parse JSON fields
@@ -34,7 +78,7 @@ function buildCaseEmbed(caseRow) {
       { name: 'Instância', value: `${caseRow.instance || 1}ª Instância`, inline: true },
       { name: 'Tribunal', value: caseRow.court || '—', inline: true },
       { name: 'Partes', value: (data.parties.length ? data.parties.join('\n') : '—'), inline: true },
-      { name: 'Participantes', value: (Object.keys(data.participants).length ? Object.entries(data.participants).map(([k,v]) => `**${k}**: ${v}`).join('\n') : '—'), inline: true }
+      { name: 'Participantes', value: formatParticipants(data.participants), inline: true }
     )
     .setFooter({ text: `Registrado por ${caseRow.created_by || '—'} • ${new Date(caseRow.created_at || Date.now()).toLocaleString()}` });
 
