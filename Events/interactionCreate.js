@@ -147,7 +147,7 @@ client.on("interactionCreate", async (interaction) => {
 
           const forumPost = await forum.threads
             .create({
-              name: `${caseNumber} — ${title}`.slice(0, 100),
+              name: `${title}`.slice(0, 100),
               message: {
                 content:
                   "**PAINEL DE HABILITAÇÃO** — Utilize os botões abaixo para liberar as partes aptas a atuar neste processo.",
@@ -751,6 +751,55 @@ client.on("interactionCreate", async (interaction) => {
   if (interaction.isButton && interaction.isButton()) {
     try {
       const id = interaction.customId;
+      if (id == "criar_processo") {
+        // open modal to create case with requested fields:
+        // Nome Polo Ativo, State ID Polo Ativo, Nome Polo Passivo, State ID Polo Passivo, Tipo de Processo
+        const modal = new ModalBuilder()
+          .setCustomId("case_create_modal")
+          .setTitle("Criar Processo | DOJ V1 (BETA)");
+
+        const activeName = new TextInputBuilder()
+          .setCustomId("active_name")
+          .setLabel("Nome do Polo Ativo")
+          .setStyle(TextInputStyle.Short)
+          .setRequired(true)
+          .setMaxLength(100);
+        const activeState = new TextInputBuilder()
+          .setCustomId("active_state")
+          .setLabel("State ID do Polo Ativo")
+          .setStyle(TextInputStyle.Short)
+          .setRequired(true)
+          .setMaxLength(50);
+        const passiveName = new TextInputBuilder()
+          .setCustomId("passive_name")
+          .setLabel("Nome do Polo Passivo")
+          .setStyle(TextInputStyle.Short)
+          .setRequired(true)
+          .setMaxLength(100);
+        const passiveState = new TextInputBuilder()
+          .setCustomId("passive_state")
+          .setLabel("State ID do Polo Passivo")
+          .setStyle(TextInputStyle.Short)
+          .setRequired(true)
+          .setMaxLength(50);
+        const procType = new TextInputBuilder()
+          .setCustomId("case_type")
+          .setLabel("Tipo de Processo (Civil/Crim/Ético/Admin)")
+          .setStyle(TextInputStyle.Short)
+          .setRequired(true)
+          .setMaxLength(50);
+
+        // exactly 5 components
+        modal.addComponents(
+          new ActionRowBuilder().addComponents(activeName),
+          new ActionRowBuilder().addComponents(activeState),
+          new ActionRowBuilder().addComponents(passiveName),
+          new ActionRowBuilder().addComponents(passiveState),
+          new ActionRowBuilder().addComponents(procType)
+        );
+
+        return interaction.showModal(modal);
+      }
       if (id.startsWith("judge_panel_")) {
         const segments = id.split(":");
         const root = segments[0];
@@ -1068,7 +1117,8 @@ client.on("interactionCreate", async (interaction) => {
         }
         if (existingId === interaction.user.id) {
           return interaction.reply({
-            content: "\`❌\` | Você já está habilitado neste cargo para o processo.",
+            content:
+              "`❌` | Você já está habilitado neste cargo para o processo.",
             ephemeral: true,
           });
         }
@@ -1078,7 +1128,7 @@ client.on("interactionCreate", async (interaction) => {
           existing.trim().length
         ) {
           return interaction.reply({
-            content: "\`❌\` | Este cargo já foi preenchido para o processo.",
+            content: "`❌` | Este cargo já foi preenchido para o processo.",
             ephemeral: true,
           });
         }
@@ -1206,7 +1256,7 @@ client.on("interactionCreate", async (interaction) => {
         ]);
         if (!caseRow)
           return interaction.reply({
-            content: "\`❌\` | Processo não encontrado.",
+            content: "`❌` | Processo não encontrado.",
             ephemeral: true,
           });
         // check permission: only Judge or Administrator
@@ -1215,7 +1265,8 @@ client.on("interactionCreate", async (interaction) => {
           !roles.memberHasRoleByKey(interaction.member, "admin")
         ) {
           return interaction.reply({
-            content: "\`❌\` | Você não tem permissão para escalonar este processo.",
+            content:
+              "`❌` | Você não tem permissão para escalonar este processo.",
             ephemeral: true,
           });
         }
@@ -1366,7 +1417,9 @@ client.on("interactionCreate", async (interaction) => {
       ) {
         const botPerms = new EmbedBuilder()
           .setDescription(
-            "`❌` | Eu não possuo a permissão `" + (slashCommand.botPerms || "") + "`"
+            "`❌` | Eu não possuo a permissão `" +
+              (slashCommand.botPerms || "") +
+              "`"
           )
           .setColor("Red");
         return interaction.reply({ embeds: [botPerms], ephemeral: true });
