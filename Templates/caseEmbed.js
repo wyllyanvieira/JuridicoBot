@@ -2,29 +2,59 @@ const { EmbedBuilder } = require('discord.js');
 
 function statusEmoji(status) {
   const map = {
-    'Pendente': '🟡',
-    'Ativo': '🟢',
-    'Arquivado': '⚫',
-    'Suspenso': '⏸️',
-    'Julgado': '✅'
+    Pendente: '🟡',
+    Ativo: '🟢',
+    Arquivado: '⚫',
+    Suspenso: '⏸️',
+    Julgado: '✅',
   };
   return map[status] || '🟡';
 }
 
-function priorityEmoji(priority) {
-  const map = { 'Baixa': '🟦', 'Média': '🟨', 'Alta': '🔴', 'Urgente': '🚨' };
-  return map[priority] || '🟨';
+function parseJSON(raw, fallback) {
+  if (!raw) return fallback;
+  if (typeof raw === 'object') return raw;
+  try {
+    return JSON.parse(raw);
+  } catch (err) {
+    return fallback;
+  }
+}
+
+function buildPartiesDisplay(metadata = {}, fallback = []) {
+  const info = metadata.parties || {};
+  const lines = [];
+
+  if (info.active?.name || info.active?.stateId) {
+    const pieces = [];
+    if (info.active?.name) pieces.push(info.active.name);
+    if (info.active?.stateId) pieces.push(`State ID: ${info.active.stateId}`);
+    lines.push(`**Polo Ativo:** ${pieces.join(' — ') || '—'}`);
+  }
+
+  if (info.passive?.name || info.passive?.stateId) {
+    const pieces = [];
+    if (info.passive?.name) pieces.push(info.passive.name);
+    if (info.passive?.stateId) pieces.push(`State ID: ${info.passive.stateId}`);
+    lines.push(`**Polo Passivo:** ${pieces.join(' — ') || '—'}`);
+  }
+
+  if (!lines.length && Array.isArray(fallback) && fallback.length) {
+    return fallback;
+  }
+
+  return lines.length ? lines : ['—'];
 }
 
 const PARTICIPANT_LABELS = {
   judge: 'Juiz',
   author: 'Advogado Polo Ativo',
-  passive: 'Advogado Polo Passivo'
+  passive: 'Advogado Polo Passivo',
 };
 
 function formatParticipantValue(value) {
   if (!value) return '—';
-  if (typeof value === 'object' && value !== null) {
+  if (typeof value === 'object') {
     if (value.id) {
       const mention = `<@${value.id}>`;
       return value.tag ? `${mention} (${value.tag})` : mention;
@@ -61,33 +91,64 @@ function formatParticipants(participants = {}) {
 }
 
 function buildCaseEmbed(caseRow) {
-  const data = Object.assign({}, caseRow);
-  // Parse JSON fields
-  try { data.parties = JSON.parse(caseRow.parties || '[]'); } catch(e){ data.parties = []; }
-  try { data.participants = JSON.parse(caseRow.participants || '{}'); } catch(e){ data.participants = {}; }
-  try { data.metadata = JSON.parse(caseRow.metadata || '{}'); } catch(e){ data.metadata = {}; }
-  try { data.timeline = JSON.parse(caseRow.timeline || '[]'); } catch(e){ data.timeline = []; }
+  const participants = parseJSON(caseRow.participants, {});
+  const metadata = parseJSON(caseRow.metadata, {});
+  const partiesList = buildPartiesDisplay(metadata, parseJSON(caseRow.parties, []));
+  const timeline = parseJSON(caseRow.timeline, []);
+  const lastUpdate = timeline.length
+    ? new Date(timeline[timeline.length - 1].at || caseRow.updated_at || caseRow.created_at || Date.now())
+    : new Date(caseRow.created_at || Date.now());
 
   const embed = new EmbedBuilder()
     .setTitle(`${caseRow.case_number} — ${caseRow.title || 'Sem título'}`)
     .setColor('#2F3136')
-    .setDescription(caseRow.description ? (caseRow.description.substring(0, 2048)) : '\u200b')
-    .addFields(
-      { name: 'Status', value: `${statusEmoji(caseRow.status)} ${caseRow.status || 'Pendente'}`, inline: true },
-      { name: 'Prioridade', value: `${priorityEmoji(caseRow.priority)} ${caseRow.priority || 'Média'}`, inline: true },
-      { name: 'Instância', value: `${caseRow.instance || 1}ª Instância`, inline: true },
-      { name: 'Tribunal', value: caseRow.court || '—', inline: true },
-      { name: 'Partes', value: (data.parties.length ? data.parties.join('\n') : '—'), inline: true },
-      { name: 'Participantes', value: formatParticipants(data.participants), inline: true }
+    .setDescription(
+      caseRow.description ? caseRow.description.substring(0, 2048) : '\u200b'
     )
-    .setFooter({ text: `Registrado por ${caseRow.created_by || '—'} • ${new Date(caseRow.created_at || Date.now()).toLocaleString()}` });
+    .addFields(
+      {
+        name: 'Status',
+        value: `${statusEmoji(caseRow.status)} ${caseRow.status || 'Pendente'}`,
+        inline: true,
+      },
+      {
+        name: 'Instância',
+        value: `${caseRow.instance || 1}ª Instância`,
+        inline: true,
+      },
+      {
+        name: 'Tipo',
+        value: caseRow.type || metadata.type || '—',
+        inline: true,
+      },
+      {
+        name: 'Partes',
+        value: partiesList.join('\n'),
+        inline: false,
+      },
+      {
+        name: 'Participantes',
+        value: formatParticipants(participants),
+        inline: false,
+      }
+    )
+    .setFooter({
+      text: `Registrado por ${caseRow.created_by || '—'} • ${new Date(
+        caseRow.created_at || Date.now()
+      ).toLocaleString()}`,
+    });
 
-  // Próxima audiência se houver no metadata
-  if (data.metadata && data.metadata.next_hearing) {
-    embed.addFields({ name: 'Próxima Audiência', value: new Date(data.metadata.next_hearing).toLocaleString(), inline: true });
+  if (metadata.next_hearing) {
+    embed.addFields({
+      name: 'Próxima Audiência',
+      value: new Date(metadata.next_hearing).toLocaleString(),
+      inline: true,
+    });
   }
+
+  embed.setTimestamp(lastUpdate);
 
   return embed;
 }
 
-module.exports = { buildCaseEmbed };
+module.exports = { buildCaseEmbed, buildPartiesDisplay };
