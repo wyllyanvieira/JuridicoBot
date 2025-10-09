@@ -84,6 +84,7 @@ function buildPanelEmbed(participants = {}) {
   return embed;
 }
 
+
 function buildPanelRow(caseId) {
   return new ActionRowBuilder().addComponents(
     new ButtonBuilder()
@@ -198,6 +199,7 @@ client.on("interactionCreate", async (interaction) => {
         let thread = null;
 
         if (forum) {
+
           const initialPanelRow = buildPanelRow(created.id);
 
           const panelEmbed = buildPanelEmbed(
@@ -209,6 +211,7 @@ client.on("interactionCreate", async (interaction) => {
             .create({
               name: `${caseNumber} — ${title}`.slice(0, 100),
               message: {
+
                 content:
                   "**PAINEL DE HABILITAÇÃO** — Utilize os botões abaixo para liberar as partes aptas a atuar neste processo.",
                 embeds: [panelEmbed, caseEmbed],
@@ -250,6 +253,7 @@ client.on("interactionCreate", async (interaction) => {
                   embeds: [panelEmbed, caseEmbed],
                   components: [buildPanelRow(created.id)],
                 });
+
               })
               .catch(() => null);
           } catch (e) {
