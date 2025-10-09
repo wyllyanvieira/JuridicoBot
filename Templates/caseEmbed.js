@@ -90,6 +90,50 @@ function formatParticipants(participants = {}) {
     .join('\n');
 }
 
+const PARTICIPANT_LABELS = {
+  judge: 'Juiz',
+  author: 'Advogado Polo Ativo',
+  passive: 'Advogado Polo Passivo'
+};
+
+function formatParticipantValue(value) {
+  if (!value) return '—';
+  if (typeof value === 'object' && value !== null) {
+    if (value.id) {
+      const mention = `<@${value.id}>`;
+      return value.tag ? `${mention} (${value.tag})` : mention;
+    }
+    if (value.mention) return value.mention;
+    if (value.name) return value.name;
+  }
+  return String(value);
+}
+
+function formatParticipants(participants = {}) {
+  const entries = [];
+  const handledKeys = new Set();
+  for (const key of Object.keys(PARTICIPANT_LABELS)) {
+    if (participants[key]) {
+      entries.push([key, participants[key]]);
+      handledKeys.add(key);
+    }
+  }
+  for (const [key, value] of Object.entries(participants)) {
+    if (!handledKeys.has(key)) {
+      entries.push([key, value]);
+    }
+  }
+
+  if (!entries.length) return '—';
+
+  return entries
+    .map(([key, value]) => {
+      const label = PARTICIPANT_LABELS[key] || key;
+      return `**${label}**: ${formatParticipantValue(value)}`;
+    })
+    .join('\n');
+}
+
 function buildCaseEmbed(caseRow) {
   const participants = parseJSON(caseRow.participants, {});
   const metadata = parseJSON(caseRow.metadata, {});

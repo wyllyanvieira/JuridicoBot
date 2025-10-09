@@ -40,6 +40,94 @@ async function loadJudgeCases(userId) {
   return filterCasesByJudge(rows, userId);
 }
 
+const PANEL_ROLES = {
+  judge: {
+    label: "Juiz",
+    waiting: "Aguardando habilitação do Juiz.",
+  },
+  author: {
+    label: "Advogado Polo Ativo",
+    waiting: "Aguardando advogado do Polo Ativo.",
+  },
+  passive: {
+    label: "Advogado Polo Passivo",
+    waiting: "Aguardando advogado do Polo Passivo.",
+  },
+};
+
+function parseParticipants(raw) {
+  if (!raw) return {};
+  if (typeof raw === "object" && !Array.isArray(raw)) return raw;
+  try {
+    return JSON.parse(raw);
+  } catch (e) {
+    return {};
+  }
+}
+
+function formatParticipantDisplay(entry) {
+  if (!entry) return null;
+  if (typeof entry === "object" && entry !== null) {
+    if (entry.id) {
+      const mention = `<@${entry.id}>`;
+      return entry.tag ? `${mention} (${entry.tag})` : mention;
+    }
+    if (entry.mention) return entry.mention;
+    if (entry.name) return entry.name;
+  }
+  return String(entry);
+}
+
+function isParticipantAssigned(entry) {
+  if (!entry) return false;
+  if (typeof entry === "object" && entry !== null) {
+    if (entry.id) return true;
+    if (entry.mention) return true;
+    if (entry.name) return true;
+  }
+  return String(entry).trim().length > 0;
+}
+
+function buildPanelEmbed(participants = {}) {
+  const embed = new EmbedBuilder()
+    .setTitle("Painel de Habilitação")
+    .setColor("#5865F2")
+    .setDescription(
+      "Clique nos botões abaixo para se habilitar no processo. Somente perfis com os cargos apropriados podem se habilitar."
+    );
+
+  const fields = Object.keys(PANEL_ROLES).map((key) => {
+    const data = PANEL_ROLES[key];
+    const display = formatParticipantDisplay(participants[key]);
+    return {
+      name: data.label,
+      value: display || data.waiting,
+      inline: true,
+    };
+  });
+
+  embed.addFields(fields);
+  return embed;
+}
+
+
+function buildPanelRow(caseId) {
+  return new ActionRowBuilder().addComponents(
+    new ButtonBuilder()
+      .setCustomId(`enable_judge_${caseId}`)
+      .setLabel("⚖️ Habilitar Juiz")
+      .setStyle(ButtonStyle.Secondary),
+    new ButtonBuilder()
+      .setCustomId(`enable_author_${caseId}`)
+      .setLabel("🛡️ Habilitar Advogado Polo Ativo")
+      .setStyle(ButtonStyle.Primary),
+    new ButtonBuilder()
+      .setCustomId(`enable_passive_${caseId}`)
+      .setLabel("🛡️ Habilitar Advogado Polo Passivo")
+      .setStyle(ButtonStyle.Primary)
+  );
+}
+
 client.on("interactionCreate", async (interaction) => {
   // Modal submissions (case creation and hearing creation)
   if (interaction.isModalSubmit && interaction.isModalSubmit()) {
