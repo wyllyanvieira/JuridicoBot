@@ -2,6 +2,9 @@ const {
   EmbedBuilder,
   PermissionsBitField,
   ChannelType,
+  ActionRowBuilder,
+  ButtonBuilder,
+  ButtonStyle,
 } = require("discord.js");
 const client = require("../index");
 const db = require("../lib/db");
@@ -79,6 +82,24 @@ function buildPanelEmbed(participants = {}) {
 
   embed.addFields(fields);
   return embed;
+}
+
+
+function buildPanelRow(caseId) {
+  return new ActionRowBuilder().addComponents(
+    new ButtonBuilder()
+      .setCustomId(`enable_judge_${caseId}`)
+      .setLabel("⚖️ Habilitar Juiz")
+      .setStyle(ButtonStyle.Secondary),
+    new ButtonBuilder()
+      .setCustomId(`enable_author_${caseId}`)
+      .setLabel("🛡️ Habilitar Advogado Polo Ativo")
+      .setStyle(ButtonStyle.Primary),
+    new ButtonBuilder()
+      .setCustomId(`enable_passive_${caseId}`)
+      .setLabel("🛡️ Habilitar Advogado Polo Passivo")
+      .setStyle(ButtonStyle.Primary)
+  );
 }
 
 client.on("interactionCreate", async (interaction) => {
@@ -178,17 +199,23 @@ client.on("interactionCreate", async (interaction) => {
         let thread = null;
 
         if (forum) {
+
+          const initialPanelRow = buildPanelRow(created.id);
+
+          const panelEmbed = buildPanelEmbed(
+            parseParticipants(created.participants)
+          );
+          const caseEmbed = buildCaseEmbed(created);
+
           const forumPost = await forum.threads
             .create({
               name: `${caseNumber} — ${title}`.slice(0, 100),
               message: {
-                content: " ",
-                files: [
-                  client.user.displayAvatarURL({
-                    extension: "png",
-                    size: 1024,
-                  }),
-                ],
+
+                content:
+                  "**PAINEL DE HABILITAÇÃO** — Utilize os botões abaixo para liberar as partes aptas a atuar neste processo.",
+                embeds: [panelEmbed, caseEmbed],
+                components: [initialPanelRow],
               },
             })
             .catch((e) => {
@@ -212,36 +239,21 @@ client.on("interactionCreate", async (interaction) => {
               .edit(thread.guild.roles.everyone, { SendMessages: false })
               .catch(() => null);
 
-            const {
-              ActionRowBuilder,
-              ButtonBuilder,
-              ButtonStyle,
-            } = require("discord.js");
-
-            const panelRow = new ActionRowBuilder().addComponents(
-              new ButtonBuilder()
-                .setCustomId(`enable_judge_${created.id}`)
-                .setLabel("⚖️ Habilitar Juiz")
-                .setStyle(ButtonStyle.Secondary),
-              new ButtonBuilder()
-                .setCustomId(`enable_author_${created.id}`)
-                .setLabel("🛡️ Habilitar Advogado Polo Ativo")
-                .setStyle(ButtonStyle.Primary),
-              new ButtonBuilder()
-                .setCustomId(`enable_passive_${created.id}`)
-                .setLabel("🛡️ Habilitar Advogado Polo Passivo")
-                .setStyle(ButtonStyle.Primary)
-            );
-
-            const panelEmbed = buildPanelEmbed({});
+            const panelEmbed = buildPanelEmbed(parseParticipants(updated.participants));
             const caseEmbed = buildCaseEmbed(updated);
 
-            await thread
-              .send({
-                content:
-                  "**PAINEL DE HABILITAÇÃO** — Utilize os botões abaixo para liberar as partes aptas a atuar neste processo.",
-                embeds: [panelEmbed, caseEmbed],
-                components: [panelRow],
+            await thread.messages
+              .fetch({ limit: 1 })
+              .then(async (messages) => {
+                const firstMessage = messages.first();
+                if (!firstMessage) return null;
+                return firstMessage.edit({
+                  content:
+                    "**PAINEL DE HABILITAÇÃO** — Utilize os botões abaixo para liberar as partes aptas a atuar neste processo.",
+                  embeds: [panelEmbed, caseEmbed],
+                  components: [buildPanelRow(created.id)],
+                });
+
               })
               .catch(() => null);
           } catch (e) {
