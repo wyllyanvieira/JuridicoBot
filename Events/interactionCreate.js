@@ -25,7 +25,10 @@ const {
   buildPanelButtons,
   updatePanelMessage,
 } = require("../lib/habilitationPanel");
-const { buildCaseEmbed, buildPartiesDisplay } = require("../Templates/caseEmbed");
+const {
+  buildCaseEmbed,
+  buildPartiesDisplay,
+} = require("../Templates/caseEmbed");
 const {
   CASES_PER_PAGE,
   buildOverviewMessage,
@@ -34,146 +37,8 @@ const {
 } = require("../lib/judgePanel");
 
 async function loadJudgeCases(userId) {
-  const rows = await db.all(
-    "SELECT * FROM cases ORDER BY id DESC LIMIT 100"
-  );
+  const rows = await db.all("SELECT * FROM cases ORDER BY id DESC LIMIT 100");
   return filterCasesByJudge(rows, userId);
-}
-
-const PANEL_ROLES = {
-  judge: {
-    label: "Juiz",
-    waiting: "Aguardando habilitação do Juiz.",
-  },
-  author: {
-    label: "Advogado Polo Ativo",
-    waiting: "Aguardando advogado do Polo Ativo.",
-  },
-  passive: {
-    label: "Advogado Polo Passivo",
-    waiting: "Aguardando advogado do Polo Passivo.",
-  },
-};
-
-function parseParticipants(raw) {
-  if (!raw) return {};
-  if (typeof raw === "object" && !Array.isArray(raw)) return raw;
-  try {
-    return JSON.parse(raw);
-  } catch (e) {
-    return {};
-  }
-}
-
-function formatParticipantDisplay(entry) {
-  if (!entry) return null;
-  if (typeof entry === "object" && entry !== null) {
-    if (entry.id) {
-      const mention = `<@${entry.id}>`;
-      return entry.tag ? `${mention} (${entry.tag})` : mention;
-    }
-    if (entry.mention) return entry.mention;
-    if (entry.name) return entry.name;
-  }
-  return String(entry);
-}
-
-function isParticipantAssigned(entry) {
-  if (!entry) return false;
-  if (typeof entry === "object" && entry !== null) {
-    if (entry.id) return true;
-    if (entry.mention) return true;
-    if (entry.name) return true;
-  }
-  return String(entry).trim().length > 0;
-}
-
-function buildPanelEmbed(participants = {}) {
-  const embed = new EmbedBuilder()
-    .setTitle("Painel de Habilitação")
-    .setColor("#5865F2")
-    .setDescription(
-      "Clique nos botões abaixo para se habilitar no processo. Somente perfis com os cargos apropriados podem se habilitar."
-    );
-
-  const fields = Object.keys(PANEL_ROLES).map((key) => {
-    const data = PANEL_ROLES[key];
-    const display = formatParticipantDisplay(participants[key]);
-    return {
-      name: data.label,
-      value: display || data.waiting,
-      inline: true,
-    };
-  });
-
-  embed.addFields(fields);
-  return embed;
-}
-
-function buildPanelRow(caseId) {
-  return new ActionRowBuilder().addComponents(
-    new ButtonBuilder()
-      .setCustomId(`enable_judge_${caseId}`)
-      .setLabel("⚖️ Habilitar Juiz")
-      .setStyle(ButtonStyle.Secondary),
-    new ButtonBuilder()
-      .setCustomId(`enable_author_${caseId}`)
-      .setLabel("🛡️ Habilitar Advogado Polo Ativo")
-      .setStyle(ButtonStyle.Primary),
-    new ButtonBuilder()
-      .setCustomId(`enable_passive_${caseId}`)
-      .setLabel("🛡️ Habilitar Advogado Polo Passivo")
-      .setStyle(ButtonStyle.Primary)
-  );
-}
-
-async function sendDebugMessage(interaction, context, error) {
-  try {
-    const cfg = (() => {
-      try {
-        return require("../config.json");
-      } catch (e) {
-        return {};
-      }
-    })();
-
-    const guild =
-      interaction.guild ||
-      (cfg.guildId ? client.guilds.cache.get(cfg.guildId) : null);
-    if (!guild) {
-      console.error(`[debug:${context}]`, error);
-      return;
-    }
-
-    const debugChannel = (() => {
-      if (cfg.channels && cfg.channels.debug) {
-        const channel = guild.channels.cache.get(cfg.channels.debug);
-        if (channel) return channel;
-      }
-      return guild.channels.cache.find((c) =>
-        ["debug", "🛠-debug", "🔧-debug", "🧪-debug"].includes(c.name)
-      );
-    })();
-
-    const content =
-      typeof error === "string"
-        ? error
-        : error && error.message
-        ? error.message
-        : "Erro desconhecido";
-
-    if (debugChannel) {
-      await debugChannel
-        .send({
-          content: `⚠️ **${context}**\n${content}`.slice(0, 1900),
-        })
-        .catch(() => null);
-    } else {
-      console.error(`[debug:${context}]`, error);
-    }
-  } catch (err) {
-    console.error("sendDebugMessage error", err, context, error);
-  }
 }
 
 client.on("interactionCreate", async (interaction) => {
@@ -287,10 +152,7 @@ client.on("interactionCreate", async (interaction) => {
                 content:
                   "**PAINEL DE HABILITAÇÃO** — Utilize os botões abaixo para liberar as partes aptas a atuar neste processo.",
                 embeds: [panelEmbed, caseEmbed],
-                components: buildPanelButtons(
-                  created.id,
-                  initialParticipants
-                ),
+                components: buildPanelButtons(created.id, initialParticipants),
               },
             })
             .catch((e) => {
@@ -489,12 +351,10 @@ client.on("interactionCreate", async (interaction) => {
           });
         } else if (action === "names" || action === "ids") {
           if (action === "names") {
-            const activeName = interaction.fields.getTextInputValue(
-              "active_name"
-            );
-            const passiveName = interaction.fields.getTextInputValue(
-              "passive_name"
-            );
+            const activeName =
+              interaction.fields.getTextInputValue("active_name");
+            const passiveName =
+              interaction.fields.getTextInputValue("passive_name");
             if (!activeName.trim() || !passiveName.trim()) {
               return interaction.reply({
                 content: "Os nomes das partes são obrigatórios.",
@@ -512,9 +372,8 @@ client.on("interactionCreate", async (interaction) => {
             });
           } else {
             const activeId = interaction.fields.getTextInputValue("active_id");
-            const passiveId = interaction.fields.getTextInputValue(
-              "passive_id"
-            );
+            const passiveId =
+              interaction.fields.getTextInputValue("passive_id");
             if (!activeId.trim() || !passiveId.trim()) {
               return interaction.reply({
                 content: "Os IDs das partes são obrigatórios.",
@@ -551,9 +410,7 @@ client.on("interactionCreate", async (interaction) => {
           await audit.logAction(
             interaction.guild,
             caseId,
-            action === "names"
-              ? "update_parties_names"
-              : "update_parties_ids",
+            action === "names" ? "update_parties_names" : "update_parties_ids",
             interaction.user,
             action === "names"
               ? "Atualizou nomes das partes"
@@ -571,9 +428,7 @@ client.on("interactionCreate", async (interaction) => {
           const title = interaction.fields
             .getTextInputValue("case_title")
             .trim();
-          const type = interaction.fields
-            .getTextInputValue("case_type")
-            .trim();
+          const type = interaction.fields.getTextInputValue("case_type").trim();
           const status = interaction.fields
             .getTextInputValue("case_status")
             .trim();
@@ -830,10 +685,10 @@ client.on("interactionCreate", async (interaction) => {
       });
     }
   }
-
-  if (interaction.isButton && interaction.isButton()) {
+  if (interaction.isStringSelectMenu && interaction.isStringSelectMenu()) {
     try {
       const id = interaction.customId;
+      // Suporte ao painel do juiz via select menu
       if (id.startsWith("judge_panel_")) {
         const segments = id.split(":");
         const root = segments[0];
@@ -845,10 +700,72 @@ client.on("interactionCreate", async (interaction) => {
           });
         }
 
+        if (root === "judge_panel_select") {
+          // Espera-se que o valor selecionado seja o ID do caso
+          const selected = interaction.values[0];
+          const caseId = parseInt(selected);
+          // Recupera todos os casos do juiz para paginação
+          const cases = await loadJudgeCases(ownerId);
+          const totalPages = Math.max(
+            0,
+            Math.ceil(cases.length / CASES_PER_PAGE) - 1
+          );
+          // Tenta encontrar a página do caso selecionado
+          let page = 0;
+          const idx = cases.findIndex((c) => c.id === caseId);
+          if (idx !== -1) page = Math.floor(idx / CASES_PER_PAGE);
+
+          const caseRow = await db.getCaseById(caseId);
+          if (!caseRow) {
+            return interaction.update(
+              buildOverviewMessage(cases, page, ownerId)
+            );
+          }
+          const allowed = filterCasesByJudge([caseRow], ownerId).length > 0;
+          if (!allowed) {
+            return interaction.update(
+              buildOverviewMessage(cases, page, ownerId)
+            );
+          }
+          return interaction.update(
+            buildCaseDetailMessage(caseRow, ownerId, page)
+          );
+        }
+      }
+    } catch (err) {
+      console.error("Select menu interaction error", err);
+      await sendDebugMessage(interaction, "Erro ao processar select", err);
+      if (interaction.deferred || interaction.replied) {
+        return interaction.followUp({
+          content: "Ocorreu um erro ao processar a interação.",
+          ephemeral: true,
+        });
+      }
+      return interaction.reply({
+        content: "Ocorreu um erro ao processar a interação.",
+        ephemeral: true,
+      });
+    }
+    return;
+  }
+  if (interaction.isButton && interaction.isButton()) {
+    try {
+      const id = interaction.customId;
+      if (id.startsWith("judge_panel_")) {
+        const segments = id.split(":");
+        const root = segments[0];
+        const ownerId = segments[1];
+        if (ownerId !== interaction.user.id) {
+          return interaction.reply({
+            content: "`💀` | Este painel pertence a outro Juiz.",
+            ephemeral: true,
+          });
+        }
+
         try {
           if (root === "judge_panel_close") {
             return interaction.update({
-              content: "Painel encerrado.",
+              content: "`💀` | Painel encerrado.",
               embeds: [],
               components: [],
             });
@@ -860,7 +777,10 @@ client.on("interactionCreate", async (interaction) => {
             Math.ceil(cases.length / CASES_PER_PAGE) - 1
           );
 
-          if (root === "judge_panel_nav" || root === "judge_panel_refresh") {
+          if (
+            root.startsWith("judge_panel_nav") ||
+            root === "judge_panel_refresh"
+          ) {
             const targetPage = Math.min(
               Math.max(0, parseInt(segments[2]) || 0),
               totalPages
@@ -877,29 +797,6 @@ client.on("interactionCreate", async (interaction) => {
             );
             return interaction.update(
               buildOverviewMessage(cases, page, ownerId)
-            );
-          }
-
-          if (root === "judge_panel_select") {
-            const caseId = parseInt(segments[2]);
-            const page = Math.min(
-              Math.max(0, parseInt(segments[3]) || 0),
-              totalPages
-            );
-            const caseRow = await db.getCaseById(caseId);
-            if (!caseRow) {
-              return interaction.update(
-                buildOverviewMessage(cases, page, ownerId)
-              );
-            }
-            const allowed = filterCasesByJudge([caseRow], ownerId).length > 0;
-            if (!allowed) {
-              return interaction.update(
-                buildOverviewMessage(cases, page, ownerId)
-              );
-            }
-            return interaction.update(
-              buildCaseDetailMessage(caseRow, ownerId, page)
             );
           }
 
@@ -937,9 +834,7 @@ client.on("interactionCreate", async (interaction) => {
                 .setStyle(TextInputStyle.Short)
                 .setRequired(true)
                 .setValue(String(caseRow.instance || ""));
-              modal.addComponents(
-                new ActionRowBuilder().addComponents(input)
-              );
+              modal.addComponents(new ActionRowBuilder().addComponents(input));
               return interaction.showModal(modal);
             }
 
@@ -1032,25 +927,21 @@ client.on("interactionCreate", async (interaction) => {
             }
 
             return interaction.reply({
-              content: "Ação não suportada.",
+              content: "`💀` | Ação não suportada.",
               ephemeral: true,
             });
           }
         } catch (err) {
           console.error("Judge panel button error", err);
-          await sendDebugMessage(
-            interaction,
-            "Erro no painel do juiz",
-            err
-          );
+          await sendDebugMessage(interaction, "Erro no painel do juiz", err);
           if (interaction.deferred || interaction.replied) {
             return interaction.followUp({
-              content: "Não foi possível processar esta ação.",
+              content: "`💀` | Não foi possível processar esta ação.",
               ephemeral: true,
             });
           }
           return interaction.reply({
-            content: "Não foi possível processar esta ação.",
+            content: "`💀` | Não foi possível processar esta ação.",
             ephemeral: true,
           });
         }
@@ -1063,7 +954,7 @@ client.on("interactionCreate", async (interaction) => {
         ]);
         if (!caseRow)
           return interaction.reply({
-            content: "Processo não encontrado.",
+            content: "`💀` | Processo não encontrado.",
             ephemeral: true,
           });
         const modal = new ModalBuilder()
@@ -1111,7 +1002,7 @@ client.on("interactionCreate", async (interaction) => {
         ]);
         if (!caseRow)
           return interaction.reply({
-            content: "Processo não encontrado.",
+            content: "`💀` | Processo não encontrado.",
             ephemeral: true,
           });
         // we expect this interaction to happen in guild context
@@ -1134,7 +1025,7 @@ client.on("interactionCreate", async (interaction) => {
         }
         if (!thread)
           return interaction.reply({
-            content: "Tópico do processo não encontrado.",
+            content: "`💀` | Tópico do processo não encontrado.",
             ephemeral: true,
           });
 
@@ -1146,7 +1037,7 @@ client.on("interactionCreate", async (interaction) => {
           ) {
             return interaction.reply({
               content:
-                "Você precisa possuir o cargo de Juiz ou Administrador para se habilitar como Juiz neste processo.",
+                "`💀` | Você precisa possuir o cargo de Juiz ou Administrador para se habilitar como Juiz neste processo.",
               ephemeral: true,
             });
           }
@@ -1156,7 +1047,7 @@ client.on("interactionCreate", async (interaction) => {
         ) {
           return interaction.reply({
             content:
-              "Apenas usuários com o cargo de Defensor/Advogado ou Administrador podem se habilitar por este botão.",
+              "`❌` | Apenas usuários com o cargo de Defensor/Advogado ou Administrador podem se habilitar por este botão.",
             ephemeral: true,
           });
         }
@@ -1171,19 +1062,23 @@ client.on("interactionCreate", async (interaction) => {
           existing && typeof existing === "object" ? existing.id : null;
         if (existingId && existingId !== interaction.user.id) {
           return interaction.reply({
-            content: `Este cargo já está ocupado por <@${existingId}>. Caso seja necessário substituir, solicite a um administrador.`,
+            content: `\`❌\` | Este cargo já está ocupado por <@${existingId}>. Caso seja necessário substituir, solicite a um administrador.`,
             ephemeral: true,
           });
         }
         if (existingId === interaction.user.id) {
           return interaction.reply({
-            content: "Você já está habilitado neste cargo para o processo.",
+            content: "\`❌\` | Você já está habilitado neste cargo para o processo.",
             ephemeral: true,
           });
         }
-        if (!existingId && typeof existing === "string" && existing.trim().length) {
+        if (
+          !existingId &&
+          typeof existing === "string" &&
+          existing.trim().length
+        ) {
           return interaction.reply({
-            content: "Este cargo já foi preenchido para o processo.",
+            content: "\`❌\` | Este cargo já foi preenchido para o processo.",
             ephemeral: true,
           });
         }
@@ -1206,9 +1101,7 @@ client.on("interactionCreate", async (interaction) => {
             thread.isThread() &&
             thread.members?.add
           ) {
-            await thread.members
-              .add(interaction.user.id)
-              .catch(() => null);
+            await thread.members.add(interaction.user.id).catch(() => null);
           }
 
           const timeline = (() => {
@@ -1252,10 +1145,7 @@ client.on("interactionCreate", async (interaction) => {
 
           const panelEmbed = buildPanelEmbed(participants);
           const caseEmbed = buildCaseEmbed(updatedCase);
-          const panelComponents = buildPanelButtons(
-            caseRow.id,
-            participants
-          );
+          const panelComponents = buildPanelButtons(caseRow.id, participants);
 
           await interaction.update({
             embeds: [panelEmbed, caseEmbed],
@@ -1276,16 +1166,14 @@ client.on("interactionCreate", async (interaction) => {
             const judgeEntry = participants.judge;
             const authorEntry = participants.author;
             const passiveEntry = participants.passive;
-            const judgeMention =
-              formatParticipantDisplay(judgeEntry) || "Juiz";
+            const judgeMention = formatParticipantDisplay(judgeEntry) || "Juiz";
             const activeMention =
               formatParticipantDisplay(authorEntry) || "Advogado Polo Ativo";
             const passiveMention =
-              formatParticipantDisplay(passiveEntry) ||
-              "Advogado Polo Passivo";
+              formatParticipantDisplay(passiveEntry) || "Advogado Polo Passivo";
             await thread
               .send({
-                content: `✅ ${judgeMention}, ${activeMention} e ${passiveMention}, todas as partes estão habilitadas. Polo Ativo, por favor, protocole a Petição Inicial para dar sequência ao processo.`,
+                content: `\`✅\` |  ${judgeMention}, ${activeMention} e ${passiveMention}, todas as partes estão habilitadas. Polo Ativo, por favor, protocole a Petição Inicial para dar sequência ao processo.`,
               })
               .catch(() => null);
           }
@@ -1298,12 +1186,12 @@ client.on("interactionCreate", async (interaction) => {
           );
           if (interaction.deferred || interaction.replied) {
             return interaction.followUp({
-              content: "Erro ao habilitar participante.",
+              content: "`❌` | Erro ao habilitar participante.",
               ephemeral: true,
             });
           }
           return interaction.reply({
-            content: "Erro ao habilitar participante.",
+            content: "`❌` | Erro ao habilitar participante.",
             ephemeral: true,
           });
         }
@@ -1318,7 +1206,7 @@ client.on("interactionCreate", async (interaction) => {
         ]);
         if (!caseRow)
           return interaction.reply({
-            content: "Processo não encontrado.",
+            content: "\`❌\` | Processo não encontrado.",
             ephemeral: true,
           });
         // check permission: only Judge or Administrator
@@ -1327,7 +1215,7 @@ client.on("interactionCreate", async (interaction) => {
           !roles.memberHasRoleByKey(interaction.member, "admin")
         ) {
           return interaction.reply({
-            content: "Você não tem permissão para escalonar este processo.",
+            content: "\`❌\` | Você não tem permissão para escalonar este processo.",
             ephemeral: true,
           });
         }
@@ -1353,7 +1241,7 @@ client.on("interactionCreate", async (interaction) => {
       if (id.startsWith("edit_")) {
         return interaction.reply({
           content:
-            "Editar via painel ainda não implementado. Use /case manage para editar.",
+            "`⚠️` | Editar via painel ainda não implementado. Use /case manage para editar.",
           ephemeral: true,
         });
       }
@@ -1365,7 +1253,7 @@ client.on("interactionCreate", async (interaction) => {
         ]);
         if (!caseRow)
           return interaction.reply({
-            content: "Processo não encontrado.",
+            content: "`❌` | Processo não encontrado.",
             ephemeral: true,
           });
         // open instructions
@@ -1378,7 +1266,7 @@ client.on("interactionCreate", async (interaction) => {
         );
         return interaction.reply({
           content:
-            "Solicitação de habilitação recebida. Use /case enroll para especificar cargo.",
+            "`✅` | Solicitação de habilitação recebida. Use /case enroll para especificar cargo.",
           ephemeral: true,
         });
       }
@@ -1387,14 +1275,14 @@ client.on("interactionCreate", async (interaction) => {
       await sendDebugMessage(interaction, "Erro ao processar botão", err);
       if (interaction.deferred || interaction.replied) {
         return interaction.followUp({
-          content: "Ocorreu um erro ao processar a interação.",
+          content: "`❌` | Ocorreu um erro ao processar a interação.",
           ephemeral: true,
         });
       }
     }
     if (!interaction.replied && !interaction.deferred) {
       await interaction.reply({
-        content: "Ocorreu um erro ao processar a interação.",
+        content: "`❌` | Ocorreu um erro ao processar a interação.",
         ephemeral: true,
       });
     }
@@ -1417,12 +1305,12 @@ client.on("interactionCreate", async (interaction) => {
       await sendDebugMessage(interaction, "Erro ao processar select", err);
       if (interaction.deferred || interaction.replied) {
         return interaction.followUp({
-          content: "Ocorreu um erro ao processar a interação.",
+          content: "`❌` |Ocorreu um erro ao processar a interação.",
           ephemeral: true,
         });
       }
       return interaction.reply({
-        content: "Ocorreu um erro ao processar a interação.",
+        content: "`❌` | Ocorreu um erro ao processar a interação.",
         ephemeral: true,
       });
     }
@@ -1443,7 +1331,8 @@ client.on("interactionCreate", async (interaction) => {
     return;
   }
 
-  if (!interaction.isChatInputCommand || !interaction.isChatInputCommand()) return;
+  if (!interaction.isChatInputCommand || !interaction.isChatInputCommand())
+    return;
   if (!interaction.guild) return;
 
   const slashCommand = client.slashCommands.get(interaction.commandName);
@@ -1477,7 +1366,7 @@ client.on("interactionCreate", async (interaction) => {
       ) {
         const botPerms = new EmbedBuilder()
           .setDescription(
-            "Eu não possuo a permissão `" + (slashCommand.botPerms || "") + "`"
+            "`❌` | Eu não possuo a permissão `" + (slashCommand.botPerms || "") + "`"
           )
           .setColor("Red");
         return interaction.reply({ embeds: [botPerms], ephemeral: true });
@@ -1487,7 +1376,7 @@ client.on("interactionCreate", async (interaction) => {
     if (slashCommand.ownerOnly) {
       if (!process.env.OWNER.includes(interaction.user.id)) {
         return interaction.reply({
-          content: `Apenas meu dono pode executar esse comando!`,
+          content: "`❌` | Apenas meu dono pode executar esse comando!",
           ephemeral: true,
         });
       }
@@ -1499,7 +1388,7 @@ client.on("interactionCreate", async (interaction) => {
     await sendDebugMessage(interaction, "Erro ao executar comando", error);
     if (!interaction.replied && !interaction.deferred) {
       await interaction.reply({
-        content: "Ocorreu um erro ao executar este comando.",
+        content: "`❌` | Ocorreu um erro ao executar este comando.",
         ephemeral: true,
       });
     }
