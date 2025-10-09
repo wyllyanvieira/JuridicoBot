@@ -70,7 +70,7 @@ module.exports = {
       const activeState = new TextInputBuilder().setCustomId('active_state').setLabel('State ID do Polo Ativo').setStyle(TextInputStyle.Short).setRequired(true).setMaxLength(50);
       const passiveName = new TextInputBuilder().setCustomId('passive_name').setLabel('Nome do Polo Passivo').setStyle(TextInputStyle.Short).setRequired(true).setMaxLength(100);
       const passiveState = new TextInputBuilder().setCustomId('passive_state').setLabel('State ID do Polo Passivo').setStyle(TextInputStyle.Short).setRequired(true).setMaxLength(50);
-  const procType = new TextInputBuilder().setCustomId('case_type').setLabel('Tipo de Processo (Civil/Crim/Ético/Admin)').setStyle(TextInputStyle.Short).setRequired(true).setMaxLength(50);
+      const procType = new TextInputBuilder().setCustomId('case_type').setLabel('Tipo de Processo (Civil/Crim/Ético/Admin)').setStyle(TextInputStyle.Short).setRequired(true).setMaxLength(50);
 
       // exactly 5 components
       modal.addComponents(
