@@ -785,7 +785,22 @@ client.on("interactionCreate", async (interaction) => {
           });
         // we expect this interaction to happen in guild context
         const guild = interaction.guild;
-        const thread = guild.channels.cache.get(String(caseRow.thread_id));
+        let thread = null;
+        if (
+          interaction.channel &&
+          interaction.channel.id === String(caseRow.thread_id)
+        ) {
+          thread = interaction.channel;
+        } else {
+          thread = guild.channels.cache.get(String(caseRow.thread_id)) || null;
+          if (!thread) {
+            try {
+              thread = await guild.channels.fetch(String(caseRow.thread_id));
+            } catch (fetchErr) {
+              thread = null;
+            }
+          }
+        }
         if (!thread)
           return interaction.reply({
             content: "Tópico do processo não encontrado.",
@@ -848,9 +863,22 @@ client.on("interactionCreate", async (interaction) => {
         };
 
         try {
-          await thread.permissionOverwrites
-            .edit(interaction.user.id, { SendMessages: true, ViewChannel: true })
-            .catch(() => null);
+          if (thread.permissionOverwrites?.edit) {
+            await thread.permissionOverwrites
+              .edit(interaction.user.id, {
+                SendMessages: true,
+                ViewChannel: true,
+              })
+              .catch(() => null);
+          } else if (
+            typeof thread.isThread === "function" &&
+            thread.isThread() &&
+            thread.members?.add
+          ) {
+            await thread.members
+              .add(interaction.user.id)
+              .catch(() => null);
+          }
 
           const timeline = (() => {
             try {
