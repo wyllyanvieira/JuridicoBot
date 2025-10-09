@@ -5,14 +5,40 @@ const {
   ActionRowBuilder,
   ButtonBuilder,
   ButtonStyle,
+  ModalBuilder,
+  TextInputBuilder,
+  TextInputStyle,
 } = require("discord.js");
 const client = require("../index");
 const db = require("../lib/db");
-const { buildCaseEmbed } = require("../Templates/caseEmbed");
 const roles = require("../lib/roles");
 const caseActions = require("../lib/caseActions");
 const audit = require("../lib/audit");
 const scheduler = require("../lib/scheduler");
+const { sendDebugMessage } = require("../lib/debug");
+const {
+  PANEL_ROLES,
+  parseParticipants,
+  formatParticipantDisplay,
+  isParticipantAssigned,
+  buildPanelEmbed,
+  buildPanelButtons,
+  updatePanelMessage,
+} = require("../lib/habilitationPanel");
+const { buildCaseEmbed, buildPartiesDisplay } = require("../Templates/caseEmbed");
+const {
+  CASES_PER_PAGE,
+  buildOverviewMessage,
+  buildCaseDetailMessage,
+  filterCasesByJudge,
+} = require("../lib/judgePanel");
+
+async function loadJudgeCases(userId) {
+  const rows = await db.all(
+    "SELECT * FROM cases ORDER BY id DESC LIMIT 100"
+  );
+  return filterCasesByJudge(rows, userId);
+}
 
 const PANEL_ROLES = {
   judge: {
@@ -119,12 +145,16 @@ client.on("interactionCreate", async (interaction) => {
 
         const description = ""; // descrição ficará via protocolo/painel
         const instance = 1; // sempre criada na 1ª instância
-        const priority = "A definir"; // será definida posteriormente pelo Juiz via painel
 
-        const parties = [
-          `${activeName} (${activeState})`,
-          `${passiveName} (${passiveState})`,
-        ];
+        const partiesMetadata = {
+          parties: {
+            active: { name: activeName, stateId: activeState },
+            passive: { name: passiveName, stateId: passiveState },
+          },
+          type: procType,
+        };
+
+        const parties = buildPartiesDisplay(partiesMetadata);
 
         // Generate sequential case number: PROC-YYYY-XXXX
         const year = new Date().getFullYear();
@@ -149,12 +179,11 @@ client.on("interactionCreate", async (interaction) => {
           description,
           type: procType,
           status: "Ativo",
-          priority,
           instance,
           court: null,
           parties,
           participants: {},
-          metadata: { activeState, passiveState },
+          metadata: partiesMetadata,
           timeline: [
             {
               action: "created",
@@ -199,23 +228,21 @@ client.on("interactionCreate", async (interaction) => {
         let thread = null;
 
         if (forum) {
-
-          const initialPanelRow = buildPanelRow(created.id);
-
-          const panelEmbed = buildPanelEmbed(
-            parseParticipants(created.participants)
-          );
+          const initialParticipants = parseParticipants(created.participants);
+          const panelEmbed = buildPanelEmbed(initialParticipants);
           const caseEmbed = buildCaseEmbed(created);
 
           const forumPost = await forum.threads
             .create({
               name: `${caseNumber} — ${title}`.slice(0, 100),
               message: {
-
                 content:
                   "**PAINEL DE HABILITAÇÃO** — Utilize os botões abaixo para liberar as partes aptas a atuar neste processo.",
                 embeds: [panelEmbed, caseEmbed],
-                components: [initialPanelRow],
+                components: buildPanelButtons(
+                  created.id,
+                  initialParticipants
+                ),
               },
             })
             .catch((e) => {
@@ -239,23 +266,7 @@ client.on("interactionCreate", async (interaction) => {
               .edit(thread.guild.roles.everyone, { SendMessages: false })
               .catch(() => null);
 
-            const panelEmbed = buildPanelEmbed(parseParticipants(updated.participants));
-            const caseEmbed = buildCaseEmbed(updated);
-
-            await thread.messages
-              .fetch({ limit: 1 })
-              .then(async (messages) => {
-                const firstMessage = messages.first();
-                if (!firstMessage) return null;
-                return firstMessage.edit({
-                  content:
-                    "**PAINEL DE HABILITAÇÃO** — Utilize os botões abaixo para liberar as partes aptas a atuar neste processo.",
-                  embeds: [panelEmbed, caseEmbed],
-                  components: [buildPanelRow(created.id)],
-                });
-
-              })
-              .catch(() => null);
+            await updatePanelMessage(thread, updated);
           } catch (e) {
             console.error("panel create error", e);
           }
@@ -278,14 +289,11 @@ client.on("interactionCreate", async (interaction) => {
           const b = new EmbedBuilder()
             .setTitle("Novo processo protocolado")
             .setDescription(`${caseNumber} — ${title}`)
-            .addFields(
-              {
-                name: "Instância",
-                value: `${instance}ª Instância`,
-                inline: true,
-              },
-              { name: "Prioridade", value: priority, inline: true }
-            )
+            .addFields({
+              name: "Instância",
+              value: `${instance}ª Instância`,
+              inline: true,
+            })
             .setTimestamp();
           if (thread)
             b.addFields({
@@ -332,6 +340,280 @@ client.on("interactionCreate", async (interaction) => {
           content: `Processo ${caseNumber} criado com sucesso.`,
           ephemeral: true,
         });
+      }
+
+      if (interaction.customId.startsWith("judge_panel_modal_")) {
+        const parts = interaction.customId.split("_");
+        const action = parts[3];
+        const caseId = parseInt(parts[4]);
+        const page = parseInt(parts[5]) || 0;
+        const ownerId = parts[6];
+
+        if (ownerId !== interaction.user.id) {
+          return interaction.reply({
+            content: "Este painel pertence a outro Juiz.",
+            ephemeral: true,
+          });
+        }
+
+        const caseRow = await db.getCaseById(caseId);
+        if (!caseRow) {
+          return interaction.reply({
+            content: "Processo não encontrado.",
+            ephemeral: true,
+          });
+        }
+
+        const allowed = filterCasesByJudge([caseRow], ownerId).length > 0;
+        if (!allowed) {
+          return interaction.reply({
+            content: "Você não está habilitado como Juiz neste processo.",
+            ephemeral: true,
+          });
+        }
+
+        const metadata = (() => {
+          try {
+            return JSON.parse(caseRow.metadata || "{}");
+          } catch (err) {
+            return {};
+          }
+        })();
+        metadata.parties = metadata.parties || {
+          active: {},
+          passive: {},
+        };
+        metadata.parties.active = metadata.parties.active || {};
+        metadata.parties.passive = metadata.parties.passive || {};
+
+        const timeline = (() => {
+          try {
+            return JSON.parse(caseRow.timeline || "[]");
+          } catch (err) {
+            return [];
+          }
+        })();
+
+        let updatedCase = null;
+        const now = new Date().toISOString();
+
+        if (action === "instance") {
+          const raw = interaction.fields.getTextInputValue("instance_value");
+          const value = parseInt(raw, 10);
+          if (!Number.isInteger(value) || value < 1) {
+            return interaction.reply({
+              content: "Informe um número de instância válido (>= 1).",
+              ephemeral: true,
+            });
+          }
+
+          timeline.push({
+            action: "instance_updated",
+            from: caseRow.instance,
+            to: value,
+            by: interaction.user.id,
+            at: now,
+          });
+
+          updatedCase = await db.updateCase(caseId, {
+            instance: value,
+            timeline,
+          });
+
+          await db.addLog(
+            caseId,
+            "update_instance",
+            interaction.user.id,
+            interaction.user.tag,
+            `Instância alterada para ${value}`
+          );
+          await audit.logAction(
+            interaction.guild,
+            caseId,
+            "update_instance",
+            interaction.user,
+            `Instância alterada para ${value}`
+          );
+
+          await interaction.reply({
+            content: `Instância atualizada para ${value}ª.`,
+            ephemeral: true,
+          });
+        } else if (action === "names" || action === "ids") {
+          if (action === "names") {
+            const activeName = interaction.fields.getTextInputValue(
+              "active_name"
+            );
+            const passiveName = interaction.fields.getTextInputValue(
+              "passive_name"
+            );
+            if (!activeName.trim() || !passiveName.trim()) {
+              return interaction.reply({
+                content: "Os nomes das partes são obrigatórios.",
+                ephemeral: true,
+              });
+            }
+            metadata.parties.active.name = activeName.trim();
+            metadata.parties.passive.name = passiveName.trim();
+            timeline.push({
+              action: "parties_names_updated",
+              by: interaction.user.id,
+              at: now,
+              active: activeName.trim(),
+              passive: passiveName.trim(),
+            });
+          } else {
+            const activeId = interaction.fields.getTextInputValue("active_id");
+            const passiveId = interaction.fields.getTextInputValue(
+              "passive_id"
+            );
+            if (!activeId.trim() || !passiveId.trim()) {
+              return interaction.reply({
+                content: "Os IDs das partes são obrigatórios.",
+                ephemeral: true,
+              });
+            }
+            metadata.parties.active.stateId = activeId.trim();
+            metadata.parties.passive.stateId = passiveId.trim();
+            timeline.push({
+              action: "parties_ids_updated",
+              by: interaction.user.id,
+              at: now,
+              active: activeId.trim(),
+              passive: passiveId.trim(),
+            });
+          }
+
+          const partiesList = buildPartiesDisplay(metadata);
+          updatedCase = await db.updateCase(caseId, {
+            metadata,
+            parties: partiesList,
+            timeline,
+          });
+
+          await db.addLog(
+            caseId,
+            action === "names" ? "update_parties_names" : "update_parties_ids",
+            interaction.user.id,
+            interaction.user.tag,
+            action === "names"
+              ? "Atualizou nomes das partes"
+              : "Atualizou IDs das partes"
+          );
+          await audit.logAction(
+            interaction.guild,
+            caseId,
+            action === "names"
+              ? "update_parties_names"
+              : "update_parties_ids",
+            interaction.user,
+            action === "names"
+              ? "Atualizou nomes das partes"
+              : "Atualizou IDs das partes"
+          );
+
+          await interaction.reply({
+            content:
+              action === "names"
+                ? "Nomes das partes atualizados."
+                : "IDs das partes atualizados.",
+            ephemeral: true,
+          });
+        } else if (action === "details") {
+          const title = interaction.fields
+            .getTextInputValue("case_title")
+            .trim();
+          const type = interaction.fields
+            .getTextInputValue("case_type")
+            .trim();
+          const status = interaction.fields
+            .getTextInputValue("case_status")
+            .trim();
+          const description = interaction.fields
+            .getTextInputValue("case_description")
+            .trim();
+
+          if (!title || !type || !status) {
+            return interaction.reply({
+              content:
+                "Título, tipo e status são obrigatórios para atualizar o processo.",
+              ephemeral: true,
+            });
+          }
+
+          metadata.type = type;
+          timeline.push({
+            action: "case_details_updated",
+            by: interaction.user.id,
+            at: now,
+            status,
+          });
+
+          updatedCase = await db.updateCase(caseId, {
+            title,
+            type,
+            status,
+            description,
+            metadata,
+            timeline,
+          });
+
+          await db.addLog(
+            caseId,
+            "update_case_details",
+            interaction.user.id,
+            interaction.user.tag,
+            "Atualizou dados gerais do processo"
+          );
+          await audit.logAction(
+            interaction.guild,
+            caseId,
+            "update_case_details",
+            interaction.user,
+            "Atualizou dados gerais do processo"
+          );
+
+          await interaction.reply({
+            content: "Dados gerais atualizados.",
+            ephemeral: true,
+          });
+        }
+
+        if (updatedCase) {
+          let thread = null;
+          if (updatedCase.thread_id && interaction.guild) {
+            thread =
+              interaction.guild.channels.cache.get(
+                String(updatedCase.thread_id)
+              ) || null;
+            if (!thread) {
+              try {
+                thread = await interaction.guild.channels.fetch(
+                  String(updatedCase.thread_id)
+                );
+              } catch (err) {
+                thread = null;
+              }
+            }
+          }
+          if (thread) await updatePanelMessage(thread, updatedCase);
+
+          if (interaction.message) {
+            try {
+              await interaction.message.edit(
+                buildCaseDetailMessage(updatedCase, ownerId, page)
+              );
+            } catch (err) {
+              await sendDebugMessage(
+                interaction,
+                "Falha ao atualizar painel do juiz",
+                err
+              );
+            }
+          }
+        }
+
+        return;
       }
 
       // escalate modal
@@ -419,129 +701,6 @@ client.on("interactionCreate", async (interaction) => {
         });
       }
 
-      if (
-        interaction.customId &&
-        interaction.customId.startsWith("set_priority_modal_")
-      ) {
-        const caseId = parseInt(interaction.customId.split("_").pop());
-        const raw =
-          interaction.fields.getTextInputValue("priority_value") || "";
-        const val = raw.trim();
-        const caseRow = await db.get("SELECT * FROM cases WHERE id = ?", [
-          caseId,
-        ]);
-        if (!caseRow)
-          return interaction.reply({
-            content: "Caso não encontrado.",
-            ephemeral: true,
-          });
-        // permission
-        if (
-          !roles.memberHasRoleByKey(interaction.member, "judge") &&
-          !roles.memberHasRoleByKey(interaction.member, "admin")
-        ) {
-          return interaction.reply({
-            content: "Você não tem permissão para definir prioridade.",
-            ephemeral: true,
-          });
-        }
-        const map = {
-          baixa: "Baixa",
-          media: "Média",
-          média: "Média",
-          alta: "Alta",
-          urgente: "Urgente",
-        };
-        const normalized =
-          map[val.toLowerCase()] ||
-          (val.length
-            ? val[0].toUpperCase() + val.slice(1).toLowerCase()
-            : null);
-        if (!normalized)
-          return interaction.reply({
-            content: "Valor de prioridade inválido.",
-            ephemeral: true,
-          });
-
-        // update DB priority
-        await db.updateCase(caseRow.id, { priority: normalized });
-
-        // update timeline
-        const timeline = JSON.parse(caseRow.timeline || "[]");
-        timeline.push({
-          action: "priority_set",
-          by: interaction.user.id,
-          at: new Date().toISOString(),
-          priority: normalized,
-        });
-        await db.updateCase(caseRow.id, { timeline });
-
-        // add log and audit
-        await db.addLog(
-          caseRow.id,
-          "set_priority",
-          interaction.user.id,
-          interaction.user.tag,
-          `Prioridade definida: ${normalized}`
-        );
-        await audit.logAction(
-          interaction.guild,
-          caseRow.id,
-          "set_priority",
-          interaction.user,
-          `Pri: ${normalized}`
-        );
-
-        // notify thread and public movements
-        try {
-          const thread = interaction.guild.channels.cache.get(
-            String(caseRow.thread_id)
-          );
-          if (thread)
-            thread
-              .send({
-                content: `🔔 Prioridade definida: **${normalized}** por ${interaction.user.tag}`,
-              })
-              .catch(() => null);
-        } catch (e) {}
-        try {
-          const cfg = require("../config.json");
-          const pub =
-            cfg && cfg.channels && cfg.channels.movements
-              ? interaction.guild.channels.cache.get(cfg.channels.movements)
-              : null;
-          const publicChannel =
-            pub ||
-            interaction.guild.channels.cache.find(
-              (c) => c.name === "📢-movimentações"
-            );
-          if (publicChannel) {
-            const b = new EmbedBuilder()
-              .setTitle("Movimentação: Prioridade")
-              .setDescription(
-                `${caseRow.case_number} — Prioridade definida para ${normalized}`
-              )
-              .addFields({
-                name: "Prioridade",
-                value: normalized,
-                inline: true,
-              })
-              .setTimestamp();
-            if (caseRow.thread_id)
-              b.addFields({
-                name: "Link",
-                value: `https://discord.com/channels/${interaction.guild.id}/${caseRow.thread_id}`,
-              });
-            publicChannel.send({ embeds: [b] }).catch(() => null);
-          }
-        } catch (e) {}
-
-        return interaction.reply({
-          content: `Prioridade atualizada para ${normalized}.`,
-          ephemeral: true,
-        });
-      }
-
       if (interaction.customId === "hearing_create_modal") {
         const whenRaw = interaction.fields.getTextInputValue("hearing_when");
         const durationRaw =
@@ -611,6 +770,12 @@ client.on("interactionCreate", async (interaction) => {
       }
     } catch (err) {
       console.error("Modal handling error:", err);
+      await sendDebugMessage(interaction, "Erro ao processar modal", err);
+      if (interaction.deferred || interaction.replied)
+        return interaction.followUp({
+          content: "Ocorreu um erro ao processar o modal.",
+          ephemeral: true,
+        });
       return interaction.reply({
         content: "Ocorreu um erro ao processar o modal.",
         ephemeral: true,
@@ -618,383 +783,627 @@ client.on("interactionCreate", async (interaction) => {
     }
   }
 
-  // Slash command handling
-  const slashCommand = client.slashCommands.get(interaction.commandName);
-  if (interaction.type == 4) {
-    if (slashCommand && slashCommand.autocomplete) {
-      const choices = [];
-      await slashCommand.autocomplete(interaction, choices);
-    }
-  }
-  if (!interaction.type == 2) return;
-  if (!interaction.guild) return;
+  if (interaction.isButton && interaction.isButton()) {
+    try {
+      const id = interaction.customId;
+      if (id.startsWith("judge_panel_")) {
+        const segments = id.split(":");
+        const root = segments[0];
+        const ownerId = segments[1];
+        if (ownerId !== interaction.user.id) {
+          return interaction.reply({
+            content: "Este painel pertence a outro Juiz.",
+            ephemeral: true,
+          });
+        }
 
-  if (!slashCommand)
-    return client.slashCommands.delete(interaction.commandName);
-  // button/select handling: if no slash command but a component interaction
-  if (!slashCommand && interaction.isButton && interaction.isButton()) {
-    const id = interaction.customId;
-    // protocol_<caseId>
-    if (id.startsWith("protocol_")) {
-      const caseId = parseInt(id.split("_")[1]);
-      const caseRow = await db.get("SELECT * FROM cases WHERE id = ?", [
-        caseId,
-      ]);
-      if (!caseRow)
-        return interaction.reply({
-          content: "Processo não encontrado.",
-          ephemeral: true,
-        });
-      const {
-        ModalBuilder,
-        TextInputBuilder,
-        TextInputStyle,
-        ActionRowBuilder,
-      } = require("discord.js");
-      const modal = new ModalBuilder()
-        .setCustomId(`protocol_modal_${caseId}`)
-        .setTitle("Protocolar Documento");
-      const name = new TextInputBuilder()
-        .setCustomId("protocol_name")
-        .setLabel("Nome do documento")
-        .setStyle(TextInputStyle.Short)
-        .setRequired(true);
-      const desc = new TextInputBuilder()
-        .setCustomId("protocol_desc")
-        .setLabel("Descrição / Observações")
-        .setStyle(TextInputStyle.Paragraph)
-        .setRequired(false);
-      modal.addComponents(
-        new ActionRowBuilder().addComponents(name),
-        new ActionRowBuilder().addComponents(desc)
-      );
-      await audit.logAction(
-        interaction.guild,
-        caseRow.id,
-        "protocol_button",
-        interaction.user,
-        `Iniciou protocolar via painel`
-      );
-      return interaction.showModal(modal);
-    }
+        try {
+          if (root === "judge_panel_close") {
+            return interaction.update({
+              content: "Painel encerrado.",
+              embeds: [],
+              components: [],
+            });
+          }
 
-    if (id.startsWith("set_priority_")) {
-      const parts = id.split("_");
-      const caseId = parseInt(parts[2]);
-      const caseRow = await db.get("SELECT * FROM cases WHERE id = ?", [
-        caseId,
-      ]);
-      if (!caseRow)
-        return interaction.reply({
-          content: "Processo não encontrado.",
-          ephemeral: true,
-        });
-      // only judge or admin can set priority
-      if (
-        !roles.memberHasRoleByKey(interaction.member, "judge") &&
-        !roles.memberHasRoleByKey(interaction.member, "admin")
-      ) {
-        return interaction.reply({
-          content: "Apenas Juiz/Administrador pode definir prioridade.",
-          ephemeral: true,
-        });
+          const cases = await loadJudgeCases(ownerId);
+          const totalPages = Math.max(
+            0,
+            Math.ceil(cases.length / CASES_PER_PAGE) - 1
+          );
+
+          if (root === "judge_panel_nav" || root === "judge_panel_refresh") {
+            const targetPage = Math.min(
+              Math.max(0, parseInt(segments[2]) || 0),
+              totalPages
+            );
+            return interaction.update(
+              buildOverviewMessage(cases, targetPage, ownerId)
+            );
+          }
+
+          if (root === "judge_panel_back") {
+            const page = Math.min(
+              Math.max(0, parseInt(segments[2]) || 0),
+              totalPages
+            );
+            return interaction.update(
+              buildOverviewMessage(cases, page, ownerId)
+            );
+          }
+
+          if (root === "judge_panel_select") {
+            const caseId = parseInt(segments[2]);
+            const page = Math.min(
+              Math.max(0, parseInt(segments[3]) || 0),
+              totalPages
+            );
+            const caseRow = await db.getCaseById(caseId);
+            if (!caseRow) {
+              return interaction.update(
+                buildOverviewMessage(cases, page, ownerId)
+              );
+            }
+            const allowed = filterCasesByJudge([caseRow], ownerId).length > 0;
+            if (!allowed) {
+              return interaction.update(
+                buildOverviewMessage(cases, page, ownerId)
+              );
+            }
+            return interaction.update(
+              buildCaseDetailMessage(caseRow, ownerId, page)
+            );
+          }
+
+          if (root === "judge_panel_action") {
+            const caseId = parseInt(segments[2]);
+            const page = Math.min(
+              Math.max(0, parseInt(segments[3]) || 0),
+              totalPages
+            );
+            const action = segments[4];
+            const caseRow = await db.getCaseById(caseId);
+            if (!caseRow) {
+              return interaction.update(
+                buildOverviewMessage(cases, page, ownerId)
+              );
+            }
+
+            const metadata = (() => {
+              try {
+                return JSON.parse(caseRow.metadata || "{}");
+              } catch (err) {
+                return {};
+              }
+            })();
+            const parties = metadata.parties || {};
+
+            const modalBaseId = `${caseId}_${page}_${ownerId}`;
+            if (action === "instance") {
+              const modal = new ModalBuilder()
+                .setCustomId(`judge_panel_modal_instance_${modalBaseId}`)
+                .setTitle("Alterar instância");
+              const input = new TextInputBuilder()
+                .setCustomId("instance_value")
+                .setLabel("Nova instância")
+                .setStyle(TextInputStyle.Short)
+                .setRequired(true)
+                .setValue(String(caseRow.instance || ""));
+              modal.addComponents(
+                new ActionRowBuilder().addComponents(input)
+              );
+              return interaction.showModal(modal);
+            }
+
+            if (action === "names") {
+              const modal = new ModalBuilder()
+                .setCustomId(`judge_panel_modal_names_${modalBaseId}`)
+                .setTitle("Alterar nomes das partes");
+              const activeName = new TextInputBuilder()
+                .setCustomId("active_name")
+                .setLabel("Nome do Polo Ativo")
+                .setStyle(TextInputStyle.Short)
+                .setRequired(true)
+                .setMaxLength(100)
+                .setValue(parties.active?.name || "");
+              const passiveName = new TextInputBuilder()
+                .setCustomId("passive_name")
+                .setLabel("Nome do Polo Passivo")
+                .setStyle(TextInputStyle.Short)
+                .setRequired(true)
+                .setMaxLength(100)
+                .setValue(parties.passive?.name || "");
+              modal.addComponents(
+                new ActionRowBuilder().addComponents(activeName),
+                new ActionRowBuilder().addComponents(passiveName)
+              );
+              return interaction.showModal(modal);
+            }
+
+            if (action === "ids") {
+              const modal = new ModalBuilder()
+                .setCustomId(`judge_panel_modal_ids_${modalBaseId}`)
+                .setTitle("Alterar IDs das partes");
+              const activeId = new TextInputBuilder()
+                .setCustomId("active_id")
+                .setLabel("State ID do Polo Ativo")
+                .setStyle(TextInputStyle.Short)
+                .setRequired(true)
+                .setValue(parties.active?.stateId || "");
+              const passiveId = new TextInputBuilder()
+                .setCustomId("passive_id")
+                .setLabel("State ID do Polo Passivo")
+                .setStyle(TextInputStyle.Short)
+                .setRequired(true)
+                .setValue(parties.passive?.stateId || "");
+              modal.addComponents(
+                new ActionRowBuilder().addComponents(activeId),
+                new ActionRowBuilder().addComponents(passiveId)
+              );
+              return interaction.showModal(modal);
+            }
+
+            if (action === "details") {
+              const modal = new ModalBuilder()
+                .setCustomId(`judge_panel_modal_details_${modalBaseId}`)
+                .setTitle("Editar dados do processo");
+              const titleInput = new TextInputBuilder()
+                .setCustomId("case_title")
+                .setLabel("Título do processo")
+                .setStyle(TextInputStyle.Short)
+                .setRequired(true)
+                .setMaxLength(100)
+                .setValue(caseRow.title || "");
+              const typeInput = new TextInputBuilder()
+                .setCustomId("case_type")
+                .setLabel("Tipo de processo")
+                .setStyle(TextInputStyle.Short)
+                .setRequired(true)
+                .setMaxLength(50)
+                .setValue(caseRow.type || "");
+              const statusInput = new TextInputBuilder()
+                .setCustomId("case_status")
+                .setLabel("Status")
+                .setStyle(TextInputStyle.Short)
+                .setRequired(true)
+                .setMaxLength(30)
+                .setValue(caseRow.status || "Pendente");
+              const descriptionInput = new TextInputBuilder()
+                .setCustomId("case_description")
+                .setLabel("Descrição")
+                .setStyle(TextInputStyle.Paragraph)
+                .setRequired(false)
+                .setValue(caseRow.description || "");
+              modal.addComponents(
+                new ActionRowBuilder().addComponents(titleInput),
+                new ActionRowBuilder().addComponents(typeInput),
+                new ActionRowBuilder().addComponents(statusInput),
+                new ActionRowBuilder().addComponents(descriptionInput)
+              );
+              return interaction.showModal(modal);
+            }
+
+            return interaction.reply({
+              content: "Ação não suportada.",
+              ephemeral: true,
+            });
+          }
+        } catch (err) {
+          console.error("Judge panel button error", err);
+          await sendDebugMessage(
+            interaction,
+            "Erro no painel do juiz",
+            err
+          );
+          if (interaction.deferred || interaction.replied) {
+            return interaction.followUp({
+              content: "Não foi possível processar esta ação.",
+              ephemeral: true,
+            });
+          }
+          return interaction.reply({
+            content: "Não foi possível processar esta ação.",
+            ephemeral: true,
+          });
+        }
       }
-      const {
-        ModalBuilder,
-        TextInputBuilder,
-        TextInputStyle,
-        ActionRowBuilder,
-      } = require("discord.js");
-      const modal = new ModalBuilder()
-        .setCustomId(`set_priority_modal_${caseId}`)
-        .setTitle("Definir Prioridade");
-      const input = new TextInputBuilder()
-        .setCustomId("priority_value")
-        .setLabel("Prioridade (Baixa/Média/Alta/Urgente)")
-        .setStyle(TextInputStyle.Short)
-        .setRequired(true);
-      modal.addComponents(new ActionRowBuilder().addComponents(input));
-      await audit.logAction(
-        interaction.guild,
-        caseRow.id,
-        "open_set_priority",
-        interaction.user,
-        `Abriu modal de prioridade via painel`
-      );
-      return interaction.showModal(modal);
-    }
+      // protocol_<caseId>
+      if (id.startsWith("protocol_")) {
+        const caseId = parseInt(id.split("_")[1]);
+        const caseRow = await db.get("SELECT * FROM cases WHERE id = ?", [
+          caseId,
+        ]);
+        if (!caseRow)
+          return interaction.reply({
+            content: "Processo não encontrado.",
+            ephemeral: true,
+          });
+        const modal = new ModalBuilder()
+          .setCustomId(`protocol_modal_${caseId}`)
+          .setTitle("Protocolar Documento");
+        const name = new TextInputBuilder()
+          .setCustomId("protocol_name")
+          .setLabel("Nome do documento")
+          .setStyle(TextInputStyle.Short)
+          .setRequired(true);
+        const desc = new TextInputBuilder()
+          .setCustomId("protocol_desc")
+          .setLabel("Descrição / Observações")
+          .setStyle(TextInputStyle.Paragraph)
+          .setRequired(false);
+        modal.addComponents(
+          new ActionRowBuilder().addComponents(name),
+          new ActionRowBuilder().addComponents(desc)
+        );
+        await audit.logAction(
+          interaction.guild,
+          caseRow.id,
+          "protocol_button",
+          interaction.user,
+          `Iniciou protocolar via painel`
+        );
+        return interaction.showModal(modal);
+      }
 
-    if (
-      id.startsWith("enable_author_") ||
-      id.startsWith("enable_judge_") ||
-      id.startsWith("enable_passive_")
-    ) {
-      const parts = id.split("_");
-      const roleKey =
-        parts[1] === "author"
-          ? "author"
-          : parts[1] === "judge"
-          ? "judge"
-          : "passive";
-      const caseId = parseInt(parts.pop());
-      const caseRow = await db.get("SELECT * FROM cases WHERE id = ?", [
-        caseId,
-      ]);
-      if (!caseRow)
-        return interaction.reply({
-          content: "Processo não encontrado.",
-          ephemeral: true,
-        });
-      // we expect this interaction to happen in guild context
-      const guild = interaction.guild;
-      const thread = guild.channels.cache.get(String(caseRow.thread_id));
-      if (!thread)
-        return interaction.reply({
-          content: "Tópico do processo não encontrado.",
-          ephemeral: true,
-        });
+      if (
+        id.startsWith("enable_author_") ||
+        id.startsWith("enable_judge_") ||
+        id.startsWith("enable_passive_")
+      ) {
+        const parts = id.split("_");
+        const roleKey =
+          parts[1] === "author"
+            ? "author"
+            : parts[1] === "judge"
+            ? "judge"
+            : "passive";
+        const caseId = parseInt(parts.pop());
+        const caseRow = await db.get("SELECT * FROM cases WHERE id = ?", [
+          caseId,
+        ]);
+        if (!caseRow)
+          return interaction.reply({
+            content: "Processo não encontrado.",
+            ephemeral: true,
+          });
+        // we expect this interaction to happen in guild context
+        const guild = interaction.guild;
+        let thread = null;
+        if (
+          interaction.channel &&
+          interaction.channel.id === String(caseRow.thread_id)
+        ) {
+          thread = interaction.channel;
+        } else {
+          thread = guild.channels.cache.get(String(caseRow.thread_id)) || null;
+          if (!thread) {
+            try {
+              thread = await guild.channels.fetch(String(caseRow.thread_id));
+            } catch (fetchErr) {
+              thread = null;
+            }
+          }
+        }
+        if (!thread)
+          return interaction.reply({
+            content: "Tópico do processo não encontrado.",
+            ephemeral: true,
+          });
 
-      const requiresJudgeRole = roleKey === "judge";
-      if (requiresJudgeRole) {
+        const requiresJudgeRole = roleKey === "judge";
+        if (requiresJudgeRole) {
+          if (
+            !roles.memberHasRoleByKey(interaction.member, "judge") &&
+            !roles.memberHasRoleByKey(interaction.member, "admin")
+          ) {
+            return interaction.reply({
+              content:
+                "Você precisa possuir o cargo de Juiz ou Administrador para se habilitar como Juiz neste processo.",
+              ephemeral: true,
+            });
+          }
+        } else if (
+          !roles.memberHasRoleByKey(interaction.member, "defender") &&
+          !roles.memberHasRoleByKey(interaction.member, "admin")
+        ) {
+          return interaction.reply({
+            content:
+              "Apenas usuários com o cargo de Defensor/Advogado ou Administrador podem se habilitar por este botão.",
+            ephemeral: true,
+          });
+        }
+
+        const participants = parseParticipants(caseRow.participants);
+        const hadAllBefore = Object.keys(PANEL_ROLES).every((key) =>
+          isParticipantAssigned(participants[key])
+        );
+
+        const existing = participants[roleKey];
+        const existingId =
+          existing && typeof existing === "object" ? existing.id : null;
+        if (existingId && existingId !== interaction.user.id) {
+          return interaction.reply({
+            content: `Este cargo já está ocupado por <@${existingId}>. Caso seja necessário substituir, solicite a um administrador.`,
+            ephemeral: true,
+          });
+        }
+        if (existingId === interaction.user.id) {
+          return interaction.reply({
+            content: "Você já está habilitado neste cargo para o processo.",
+            ephemeral: true,
+          });
+        }
+        if (!existingId && typeof existing === "string" && existing.trim().length) {
+          return interaction.reply({
+            content: "Este cargo já foi preenchido para o processo.",
+            ephemeral: true,
+          });
+        }
+
+        participants[roleKey] = {
+          id: interaction.user.id,
+          tag: interaction.user.tag,
+        };
+
+        try {
+          if (thread.permissionOverwrites?.edit) {
+            await thread.permissionOverwrites
+              .edit(interaction.user.id, {
+                SendMessages: true,
+                ViewChannel: true,
+              })
+              .catch(() => null);
+          } else if (
+            typeof thread.isThread === "function" &&
+            thread.isThread() &&
+            thread.members?.add
+          ) {
+            await thread.members
+              .add(interaction.user.id)
+              .catch(() => null);
+          }
+
+          const timeline = (() => {
+            try {
+              return JSON.parse(caseRow.timeline || "[]");
+            } catch (e) {
+              return [];
+            }
+          })();
+          timeline.push({
+            action: "enable",
+            role: roleKey,
+            user: interaction.user.id,
+            at: new Date().toISOString(),
+          });
+
+          const updatedCase = await db.updateCase(caseRow.id, {
+            participants,
+            timeline,
+          });
+
+          await db.addLog(
+            caseRow.id,
+            "enable_participant",
+            interaction.user.id,
+            interaction.user.tag,
+            `Habilitado ${PANEL_ROLES[roleKey]?.label || roleKey} por ${
+              interaction.user.tag
+            }`
+          );
+
+          await audit.logAction(
+            guild,
+            caseRow.id,
+            "enable_participant",
+            interaction.user,
+            `Habilitado ${PANEL_ROLES[roleKey]?.label || roleKey}: ${
+              interaction.user.tag
+            }`
+          );
+
+          const panelEmbed = buildPanelEmbed(participants);
+          const caseEmbed = buildCaseEmbed(updatedCase);
+          const panelComponents = buildPanelButtons(
+            caseRow.id,
+            participants
+          );
+
+          await interaction.update({
+            embeds: [panelEmbed, caseEmbed],
+            components: panelComponents,
+          });
+
+          await interaction.followUp({
+            content: `Você foi habilitado como ${
+              PANEL_ROLES[roleKey]?.label || roleKey
+            } neste processo e pode enviar mensagens aqui.`,
+            ephemeral: true,
+          });
+
+          const hasAllNow = Object.keys(PANEL_ROLES).every((key) =>
+            isParticipantAssigned(participants[key])
+          );
+          if (!hadAllBefore && hasAllNow) {
+            const judgeEntry = participants.judge;
+            const authorEntry = participants.author;
+            const passiveEntry = participants.passive;
+            const judgeMention =
+              formatParticipantDisplay(judgeEntry) || "Juiz";
+            const activeMention =
+              formatParticipantDisplay(authorEntry) || "Advogado Polo Ativo";
+            const passiveMention =
+              formatParticipantDisplay(passiveEntry) ||
+              "Advogado Polo Passivo";
+            await thread
+              .send({
+                content: `✅ ${judgeMention}, ${activeMention} e ${passiveMention}, todas as partes estão habilitadas. Polo Ativo, por favor, protocole a Petição Inicial para dar sequência ao processo.`,
+              })
+              .catch(() => null);
+          }
+        } catch (err) {
+          console.error("enable participant error", err);
+          await sendDebugMessage(
+            interaction,
+            "Erro ao habilitar participante",
+            err
+          );
+          if (interaction.deferred || interaction.replied) {
+            return interaction.followUp({
+              content: "Erro ao habilitar participante.",
+              ephemeral: true,
+            });
+          }
+          return interaction.reply({
+            content: "Erro ao habilitar participante.",
+            ephemeral: true,
+          });
+        }
+
+        return;
+      }
+
+      if (id.startsWith("escalate_")) {
+        const caseId = parseInt(id.split("_")[1]);
+        const caseRow = await db.get("SELECT * FROM cases WHERE id = ?", [
+          caseId,
+        ]);
+        if (!caseRow)
+          return interaction.reply({
+            content: "Processo não encontrado.",
+            ephemeral: true,
+          });
+        // check permission: only Judge or Administrator
         if (
           !roles.memberHasRoleByKey(interaction.member, "judge") &&
           !roles.memberHasRoleByKey(interaction.member, "admin")
         ) {
           return interaction.reply({
-            content:
-              "Você precisa possuir o cargo de Juiz ou Administrador para se habilitar como Juiz neste processo.",
+            content: "Você não tem permissão para escalonar este processo.",
             ephemeral: true,
           });
         }
-      } else if (
-        !roles.memberHasRoleByKey(interaction.member, "defender") &&
-        !roles.memberHasRoleByKey(interaction.member, "admin")
-      ) {
+        // show modal to ask target instance
+        const {
+          ModalBuilder,
+          TextInputBuilder,
+          TextInputStyle,
+          ActionRowBuilder,
+        } = require("discord.js");
+        const modal = new ModalBuilder()
+          .setCustomId(`escalate_modal_${caseId}`)
+          .setTitle("Escalonar Processo");
+        const input = new TextInputBuilder()
+          .setCustomId("escalate_target")
+          .setLabel("Instância destino (1,2 ou 3)")
+          .setStyle(TextInputStyle.Short)
+          .setRequired(true);
+        modal.addComponents(new ActionRowBuilder().addComponents(input));
+        return interaction.showModal(modal);
+      }
+
+      if (id.startsWith("edit_")) {
         return interaction.reply({
           content:
-            "Apenas usuários com o cargo de Defensor/Advogado ou Administrador podem se habilitar por este botão.",
+            "Editar via painel ainda não implementado. Use /case manage para editar.",
           ephemeral: true,
         });
       }
 
-      const participants = parseParticipants(caseRow.participants);
-      const hadAllBefore = Object.keys(PANEL_ROLES).every((key) =>
-        isParticipantAssigned(participants[key])
-      );
-
-      const existing = participants[roleKey];
-      const existingId =
-        existing && typeof existing === "object" ? existing.id : null;
-      if (existingId && existingId !== interaction.user.id) {
-        return interaction.reply({
-          content: `Este cargo já está ocupado por <@${existingId}>. Caso seja necessário substituir, solicite a um administrador.`,
-          ephemeral: true,
-        });
-      }
-      if (existingId === interaction.user.id) {
-        return interaction.reply({
-          content: "Você já está habilitado neste cargo para o processo.",
-          ephemeral: true,
-        });
-      }
-      if (!existingId && typeof existing === "string" && existing.trim().length) {
-        return interaction.reply({
-          content: "Este cargo já foi preenchido para o processo.",
-          ephemeral: true,
-        });
-      }
-
-      participants[roleKey] = {
-        id: interaction.user.id,
-        tag: interaction.user.tag,
-      };
-
-      try {
-        await thread.permissionOverwrites
-          .edit(interaction.user.id, { SendMessages: true, ViewChannel: true })
-          .catch(() => null);
-
-        const timeline = (() => {
-          try {
-            return JSON.parse(caseRow.timeline || "[]");
-          } catch (e) {
-            return [];
-          }
-        })();
-        timeline.push({
-          action: "enable",
-          role: roleKey,
-          user: interaction.user.id,
-          at: new Date().toISOString(),
-        });
-
-        const updatedCase = await db.updateCase(caseRow.id, {
-          participants,
-          timeline,
-        });
-
-        await db.addLog(
-          caseRow.id,
-          "enable_participant",
-          interaction.user.id,
-          interaction.user.tag,
-          `Habilitado ${PANEL_ROLES[roleKey]?.label || roleKey} por ${
-            interaction.user.tag
-          }`
-        );
-
-        await audit.logAction(
-          guild,
-          caseRow.id,
-          "enable_participant",
-          interaction.user,
-          `Habilitado ${PANEL_ROLES[roleKey]?.label || roleKey}: ${
-            interaction.user.tag
-          }`
-        );
-
-        const components = interaction.message.components;
-        const panelEmbed = buildPanelEmbed(participants);
-        const caseEmbed = buildCaseEmbed(updatedCase);
-
-        await interaction.update({
-          embeds: [panelEmbed, caseEmbed],
-          components,
-        });
-
-        await interaction.followUp({
-          content: `Você foi habilitado como ${
-            PANEL_ROLES[roleKey]?.label || roleKey
-          } neste processo e pode enviar mensagens aqui.`,
-          ephemeral: true,
-        });
-
-        const hasAllNow = Object.keys(PANEL_ROLES).every((key) =>
-          isParticipantAssigned(participants[key])
-        );
-        if (!hadAllBefore && hasAllNow) {
-          const judgeEntry = participants.judge;
-          const authorEntry = participants.author;
-          const passiveEntry = participants.passive;
-          const judgeMention = formatParticipantDisplay(judgeEntry) || "Juiz";
-          const activeMention =
-            formatParticipantDisplay(authorEntry) || "Advogado Polo Ativo";
-          const passiveMention =
-            formatParticipantDisplay(passiveEntry) ||
-            "Advogado Polo Passivo";
-          await thread
-            .send({
-              content: `✅ ${judgeMention}, ${activeMention} e ${passiveMention}, todas as partes estão habilitadas. Polo Ativo, por favor, protocole a Petição Inicial para dar sequência ao processo.`,
-            })
-            .catch(() => null);
-        }
-      } catch (err) {
-        console.error("enable participant error", err);
-        if (interaction.deferred || interaction.replied) {
-          return interaction.followUp({
-            content: "Erro ao habilitar participante.",
+      if (id.startsWith("enroll_")) {
+        const caseId = parseInt(id.split("_")[1]);
+        const caseRow = await db.get("SELECT * FROM cases WHERE id = ?", [
+          caseId,
+        ]);
+        if (!caseRow)
+          return interaction.reply({
+            content: "Processo não encontrado.",
             ephemeral: true,
           });
-        }
+        // open instructions
+        await audit.logAction(
+          interaction.guild,
+          caseRow.id,
+          "enroll_request",
+          interaction.user,
+          `Solicitou habilitação via painel`
+        );
         return interaction.reply({
-          content: "Erro ao habilitar participante.",
+          content:
+            "Solicitação de habilitação recebida. Use /case enroll para especificar cargo.",
           ephemeral: true,
         });
       }
-
-      return;
-    }
-
-    if (id.startsWith("escalate_")) {
-      const caseId = parseInt(id.split("_")[1]);
-      const caseRow = await db.get("SELECT * FROM cases WHERE id = ?", [
-        caseId,
-      ]);
-      if (!caseRow)
-        return interaction.reply({
-          content: "Processo não encontrado.",
-          ephemeral: true,
-        });
-      // check permission: only Judge or Administrator
-      if (
-        !roles.memberHasRoleByKey(interaction.member, "judge") &&
-        !roles.memberHasRoleByKey(interaction.member, "admin")
-      ) {
-        return interaction.reply({
-          content: "Você não tem permissão para escalonar este processo.",
+    } catch (err) {
+      console.error("Button interaction error", err);
+      await sendDebugMessage(interaction, "Erro ao processar botão", err);
+      if (interaction.deferred || interaction.replied) {
+        return interaction.followUp({
+          content: "Ocorreu um erro ao processar a interação.",
           ephemeral: true,
         });
       }
-      // show modal to ask target instance
-      const {
-        ModalBuilder,
-        TextInputBuilder,
-        TextInputStyle,
-        ActionRowBuilder,
-      } = require("discord.js");
-      const modal = new ModalBuilder()
-        .setCustomId(`escalate_modal_${caseId}`)
-        .setTitle("Escalonar Processo");
-      const input = new TextInputBuilder()
-        .setCustomId("escalate_target")
-        .setLabel("Instância destino (1,2 ou 3)")
-        .setStyle(TextInputStyle.Short)
-        .setRequired(true);
-      modal.addComponents(new ActionRowBuilder().addComponents(input));
-      return interaction.showModal(modal);
     }
-
-    if (id.startsWith("edit_")) {
-      return interaction.reply({
-        content:
-          "Editar via painel ainda não implementado. Use /case manage para editar.",
+    if (!interaction.replied && !interaction.deferred) {
+      await interaction.reply({
+        content: "Ocorreu um erro ao processar a interação.",
         ephemeral: true,
       });
     }
+    return;
+  }
 
-    if (id.startsWith("enroll_")) {
-      const caseId = parseInt(id.split("_")[1]);
-      const caseRow = await db.get("SELECT * FROM cases WHERE id = ?", [
-        caseId,
-      ]);
-      if (!caseRow)
-        return interaction.reply({
-          content: "Processo não encontrado.",
+  if (interaction.isStringSelectMenu && interaction.isStringSelectMenu()) {
+    try {
+      const id = interaction.customId;
+      if (id.startsWith("action_select_")) {
+        const val = interaction.values[0];
+        await interaction.deferUpdate();
+        return interaction.followUp({
+          content: `Ação selecionada: ${val}. Use o painel para confirmar.`,
           ephemeral: true,
         });
-      // open instructions
-      await audit.logAction(
-        interaction.guild,
-        caseRow.id,
-        "enroll_request",
-        interaction.user,
-        `Solicitou habilitação via painel`
-      );
+      }
+    } catch (err) {
+      console.error("Select menu interaction error", err);
+      await sendDebugMessage(interaction, "Erro ao processar select", err);
+      if (interaction.deferred || interaction.replied) {
+        return interaction.followUp({
+          content: "Ocorreu um erro ao processar a interação.",
+          ephemeral: true,
+        });
+      }
       return interaction.reply({
-        content:
-          "Solicitação de habilitação recebida. Use /case enroll para especificar cargo.",
+        content: "Ocorreu um erro ao processar a interação.",
         ephemeral: true,
       });
     }
+    return;
   }
 
-  if (
-    !slashCommand &&
-    interaction.isStringSelectMenu &&
-    interaction.isStringSelectMenu()
-  ) {
-    const id = interaction.customId;
-    if (id.startsWith("action_select_")) {
-      const val = interaction.values[0];
-      // emulate pressing the corresponding button
-      await interaction.deferUpdate();
-      // just reply ephemeral mapping
-      return interaction.followUp({
-        content: `Ação selecionada: ${val}. Use o painel para confirmar.`,
-        ephemeral: true,
-      });
+  if (interaction.isAutocomplete && interaction.isAutocomplete()) {
+    const slashCommand = client.slashCommands.get(interaction.commandName);
+    if (slashCommand && typeof slashCommand.autocomplete === "function") {
+      try {
+        const choices = [];
+        await slashCommand.autocomplete(interaction, choices);
+      } catch (err) {
+        console.error("Autocomplete error", err);
+        await sendDebugMessage(interaction, "Erro no autocomplete", err);
+      }
     }
+    return;
   }
+
+  if (!interaction.isChatInputCommand || !interaction.isChatInputCommand()) return;
+  if (!interaction.guild) return;
+
+  const slashCommand = client.slashCommands.get(interaction.commandName);
+  if (!slashCommand) {
+    client.slashCommands.delete(interaction.commandName);
+    return;
+  }
+
   try {
     if (slashCommand.userPerms || slashCommand.botPerms) {
       if (
@@ -1039,5 +1448,12 @@ client.on("interactionCreate", async (interaction) => {
     await slashCommand.run(client, interaction);
   } catch (error) {
     console.log(error);
+    await sendDebugMessage(interaction, "Erro ao executar comando", error);
+    if (!interaction.replied && !interaction.deferred) {
+      await interaction.reply({
+        content: "Ocorreu um erro ao executar este comando.",
+        ephemeral: true,
+      });
+    }
   }
 });
