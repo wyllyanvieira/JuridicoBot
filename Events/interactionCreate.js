@@ -2,6 +2,9 @@ const {
   EmbedBuilder,
   PermissionsBitField,
   ChannelType,
+  ActionRowBuilder,
+  ButtonBuilder,
+  ButtonStyle,
 } = require("discord.js");
 const client = require("../index");
 const db = require("../lib/db");
@@ -10,6 +13,93 @@ const roles = require("../lib/roles");
 const caseActions = require("../lib/caseActions");
 const audit = require("../lib/audit");
 const scheduler = require("../lib/scheduler");
+
+const PANEL_ROLES = {
+  judge: {
+    label: "Juiz",
+    waiting: "Aguardando habilitação do Juiz.",
+  },
+  author: {
+    label: "Advogado Polo Ativo",
+    waiting: "Aguardando advogado do Polo Ativo.",
+  },
+  passive: {
+    label: "Advogado Polo Passivo",
+    waiting: "Aguardando advogado do Polo Passivo.",
+  },
+};
+
+function parseParticipants(raw) {
+  if (!raw) return {};
+  if (typeof raw === "object" && !Array.isArray(raw)) return raw;
+  try {
+    return JSON.parse(raw);
+  } catch (e) {
+    return {};
+  }
+}
+
+function formatParticipantDisplay(entry) {
+  if (!entry) return null;
+  if (typeof entry === "object" && entry !== null) {
+    if (entry.id) {
+      const mention = `<@${entry.id}>`;
+      return entry.tag ? `${mention} (${entry.tag})` : mention;
+    }
+    if (entry.mention) return entry.mention;
+    if (entry.name) return entry.name;
+  }
+  return String(entry);
+}
+
+function isParticipantAssigned(entry) {
+  if (!entry) return false;
+  if (typeof entry === "object" && entry !== null) {
+    if (entry.id) return true;
+    if (entry.mention) return true;
+    if (entry.name) return true;
+  }
+  return String(entry).trim().length > 0;
+}
+
+function buildPanelEmbed(participants = {}) {
+  const embed = new EmbedBuilder()
+    .setTitle("Painel de Habilitação")
+    .setColor("#5865F2")
+    .setDescription(
+      "Clique nos botões abaixo para se habilitar no processo. Somente perfis com os cargos apropriados podem se habilitar."
+    );
+
+  const fields = Object.keys(PANEL_ROLES).map((key) => {
+    const data = PANEL_ROLES[key];
+    const display = formatParticipantDisplay(participants[key]);
+    return {
+      name: data.label,
+      value: display || data.waiting,
+      inline: true,
+    };
+  });
+
+  embed.addFields(fields);
+  return embed;
+}
+
+function buildPanelRow(caseId) {
+  return new ActionRowBuilder().addComponents(
+    new ButtonBuilder()
+      .setCustomId(`enable_judge_${caseId}`)
+      .setLabel("⚖️ Habilitar Juiz")
+      .setStyle(ButtonStyle.Secondary),
+    new ButtonBuilder()
+      .setCustomId(`enable_author_${caseId}`)
+      .setLabel("🛡️ Habilitar Advogado Polo Ativo")
+      .setStyle(ButtonStyle.Primary),
+    new ButtonBuilder()
+      .setCustomId(`enable_passive_${caseId}`)
+      .setLabel("🛡️ Habilitar Advogado Polo Passivo")
+      .setStyle(ButtonStyle.Primary)
+  );
+}
 
 client.on("interactionCreate", async (interaction) => {
   // Modal submissions (case creation and hearing creation)
@@ -108,20 +198,22 @@ client.on("interactionCreate", async (interaction) => {
         let thread = null;
 
         if (forum) {
-          // construa o embed base sem depender de thread_id
-          const baseEmbed = buildCaseEmbed(created);
+          const initialPanelRow = buildPanelRow(created.id);
 
-          // Em ForumChannel é obrigatório enviar uma message inicial.
-          // NÃO use "type: ChannelType.PublicThread" aqui.
+          const panelEmbed = buildPanelEmbed(
+            parseParticipants(created.participants)
+          );
+          const caseEmbed = buildCaseEmbed(created);
+
           const forumPost = await forum.threads
             .create({
               name: `${caseNumber} — ${title}`.slice(0, 100),
               message: {
-                content: `**${title}**\nPartes: ${parties.join(" vs ")}`,
-                embeds: [baseEmbed],
+                content:
+                  "**PAINEL DE HABILITAÇÃO** — Utilize os botões abaixo para liberar as partes aptas a atuar neste processo.",
+                embeds: [panelEmbed, caseEmbed],
+                components: [initialPanelRow],
               },
-              // opcional: tags de fórum, se tiver IDs no config
-              // appliedTags: cfg?.forums?.tagId ? [cfg.forums.tagId] : [],
             })
             .catch((e) => {
               console.error("Erro ao criar post no Fórum:", e);
@@ -134,15 +226,9 @@ client.on("interactionCreate", async (interaction) => {
 
         // atualize o case com o thread_id e siga com as mensagens de painel
         if (thread) {
-          await db.updateCase(created.id, { thread_id: String(thread.id) });
-
-          // (opcional) reenviar um embed atualizado agora que já há thread_id
-          try {
-            const threadEmbed = buildCaseEmbed(
-              Object.assign(created, { thread_id: thread.id })
-            );
-            await thread.send({ embeds: [threadEmbed] }).catch(() => null);
-          } catch {}
+          const updated = await db.updateCase(created.id, {
+            thread_id: String(thread.id),
+          });
 
           try {
             // bloquear envio de mensagens por default
@@ -150,36 +236,22 @@ client.on("interactionCreate", async (interaction) => {
               .edit(thread.guild.roles.everyone, { SendMessages: false })
               .catch(() => null);
 
-            const {
-              ActionRowBuilder,
-              ButtonBuilder,
-              ButtonStyle,
-            } = require("discord.js");
+            const panelEmbed = buildPanelEmbed(parseParticipants(updated.participants));
+            const caseEmbed = buildCaseEmbed(updated);
 
-            const panelRow = new ActionRowBuilder().addComponents(
-              new ButtonBuilder()
-                .setCustomId(`enable_author_${created.id}`)
-                .setLabel("🔓 Habilitar Parte Ativa")
-                .setStyle(ButtonStyle.Primary),
-              new ButtonBuilder()
-                .setCustomId(`enable_judge_${created.id}`)
-                .setLabel("⚖️ Habilitar Juiz")
-                .setStyle(ButtonStyle.Secondary),
-              new ButtonBuilder()
-                .setCustomId(`enable_passive_${created.id}`)
-                .setLabel("🔓 Habilitar Parte Passiva")
-                .setStyle(ButtonStyle.Primary),
-              new ButtonBuilder()
-                .setCustomId(`set_priority_${created.id}`)
-                .setLabel("⚖️ Definir Prioridade")
-                .setStyle(ButtonStyle.Success)
-            );
-
-            await thread.send({
-              content:
-                "**PAINEL** — Habilite participantes abaixo. Apenas usuários habilitados poderão enviar mensagens neste tópico.",
-              components: [panelRow],
-            });
+            await thread.messages
+              .fetch({ limit: 1 })
+              .then(async (messages) => {
+                const firstMessage = messages.first();
+                if (!firstMessage) return null;
+                return firstMessage.edit({
+                  content:
+                    "**PAINEL DE HABILITAÇÃO** — Utilize os botões abaixo para liberar as partes aptas a atuar neste processo.",
+                  embeds: [panelEmbed, caseEmbed],
+                  components: [buildPanelRow(created.id)],
+                });
+              })
+              .catch(() => null);
           } catch (e) {
             console.error("panel create error", e);
           }
@@ -678,45 +750,155 @@ client.on("interactionCreate", async (interaction) => {
           ephemeral: true,
         });
 
-      // permission: allow the clicking user to SendMessages
+      const requiresJudgeRole = roleKey === "judge";
+      if (requiresJudgeRole) {
+        if (
+          !roles.memberHasRoleByKey(interaction.member, "judge") &&
+          !roles.memberHasRoleByKey(interaction.member, "admin")
+        ) {
+          return interaction.reply({
+            content:
+              "Você precisa possuir o cargo de Juiz ou Administrador para se habilitar como Juiz neste processo.",
+            ephemeral: true,
+          });
+        }
+      } else if (
+        !roles.memberHasRoleByKey(interaction.member, "defender") &&
+        !roles.memberHasRoleByKey(interaction.member, "admin")
+      ) {
+        return interaction.reply({
+          content:
+            "Apenas usuários com o cargo de Defensor/Advogado ou Administrador podem se habilitar por este botão.",
+          ephemeral: true,
+        });
+      }
+
+      const participants = parseParticipants(caseRow.participants);
+      const hadAllBefore = Object.keys(PANEL_ROLES).every((key) =>
+        isParticipantAssigned(participants[key])
+      );
+
+      const existing = participants[roleKey];
+      const existingId =
+        existing && typeof existing === "object" ? existing.id : null;
+      if (existingId && existingId !== interaction.user.id) {
+        return interaction.reply({
+          content: `Este cargo já está ocupado por <@${existingId}>. Caso seja necessário substituir, solicite a um administrador.`,
+          ephemeral: true,
+        });
+      }
+      if (existingId === interaction.user.id) {
+        return interaction.reply({
+          content: "Você já está habilitado neste cargo para o processo.",
+          ephemeral: true,
+        });
+      }
+      if (!existingId && typeof existing === "string" && existing.trim().length) {
+        return interaction.reply({
+          content: "Este cargo já foi preenchido para o processo.",
+          ephemeral: true,
+        });
+      }
+
+      participants[roleKey] = {
+        id: interaction.user.id,
+        tag: interaction.user.tag,
+      };
+
       try {
         await thread.permissionOverwrites
           .edit(interaction.user.id, { SendMessages: true, ViewChannel: true })
           .catch(() => null);
-        // log and timeline
-        await db.addLog(
-          caseRow.id,
-          "enable_participant",
-          interaction.user.id,
-          interaction.user.tag,
-          `Habilitado ${roleKey} por ${interaction.user.tag}`
-        );
-        const timeline = JSON.parse(caseRow.timeline || "[]");
+
+        const timeline = (() => {
+          try {
+            return JSON.parse(caseRow.timeline || "[]");
+          } catch (e) {
+            return [];
+          }
+        })();
         timeline.push({
           action: "enable",
           role: roleKey,
           user: interaction.user.id,
           at: new Date().toISOString(),
         });
-        await db.updateCase(caseRow.id, { timeline });
+
+        const updatedCase = await db.updateCase(caseRow.id, {
+          participants,
+          timeline,
+        });
+
+        await db.addLog(
+          caseRow.id,
+          "enable_participant",
+          interaction.user.id,
+          interaction.user.tag,
+          `Habilitado ${PANEL_ROLES[roleKey]?.label || roleKey} por ${
+            interaction.user.tag
+          }`
+        );
+
         await audit.logAction(
           guild,
           caseRow.id,
           "enable_participant",
           interaction.user,
-          `Habilitado ${roleKey}: ${interaction.user.tag}`
+          `Habilitado ${PANEL_ROLES[roleKey]?.label || roleKey}: ${
+            interaction.user.tag
+          }`
         );
-        return interaction.reply({
-          content: `Você foi habilitado como ${roleKey} neste processo e pode enviar mensagens aqui.`,
+
+        const components = interaction.message.components;
+        const panelEmbed = buildPanelEmbed(participants);
+        const caseEmbed = buildCaseEmbed(updatedCase);
+
+        await interaction.update({
+          embeds: [panelEmbed, caseEmbed],
+          components,
+        });
+
+        await interaction.followUp({
+          content: `Você foi habilitado como ${
+            PANEL_ROLES[roleKey]?.label || roleKey
+          } neste processo e pode enviar mensagens aqui.`,
           ephemeral: true,
         });
+
+        const hasAllNow = Object.keys(PANEL_ROLES).every((key) =>
+          isParticipantAssigned(participants[key])
+        );
+        if (!hadAllBefore && hasAllNow) {
+          const judgeEntry = participants.judge;
+          const authorEntry = participants.author;
+          const passiveEntry = participants.passive;
+          const judgeMention = formatParticipantDisplay(judgeEntry) || "Juiz";
+          const activeMention =
+            formatParticipantDisplay(authorEntry) || "Advogado Polo Ativo";
+          const passiveMention =
+            formatParticipantDisplay(passiveEntry) ||
+            "Advogado Polo Passivo";
+          await thread
+            .send({
+              content: `✅ ${judgeMention}, ${activeMention} e ${passiveMention}, todas as partes estão habilitadas. Polo Ativo, por favor, protocole a Petição Inicial para dar sequência ao processo.`,
+            })
+            .catch(() => null);
+        }
       } catch (err) {
         console.error("enable participant error", err);
+        if (interaction.deferred || interaction.replied) {
+          return interaction.followUp({
+            content: "Erro ao habilitar participante.",
+            ephemeral: true,
+          });
+        }
         return interaction.reply({
           content: "Erro ao habilitar participante.",
           ephemeral: true,
         });
       }
+
+      return;
     }
 
     if (id.startsWith("escalate_")) {
