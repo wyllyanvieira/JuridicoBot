@@ -48,8 +48,8 @@ function buildPartiesDisplay(metadata = {}, fallback = []) {
 
 const PARTICIPANT_LABELS = {
   judge: 'Juiz',
-  author: 'Advogado Polo Ativo',
-  passive: 'Advogado Polo Passivo',
+  author: 'Defensor do Polo Ativo',
+  passive: 'Defensor do Polo Passivo',
 };
 
 function formatParticipantValue(value) {
@@ -57,7 +57,7 @@ function formatParticipantValue(value) {
   if (typeof value === 'object') {
     if (value.id) {
       const mention = `<@${value.id}>`;
-      return value.tag ? `${mention} (${value.tag})` : mention;
+      return value.tag ? `${mention} (${value.displayName})` : mention;
     }
     if (value.mention) return value.mention;
     if (value.name) return value.name;
@@ -101,7 +101,7 @@ function buildCaseEmbed(caseRow) {
 
   const embed = new EmbedBuilder()
     .setTitle(`${caseRow.case_number} — ${caseRow.title || 'Sem título'}`)
-    .setColor('#2F3136')
+    .setColor('#f1c40f')
     .setDescription(
       caseRow.description ? caseRow.description.substring(0, 2048) : '\u200b'
     )
