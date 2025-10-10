@@ -57,7 +57,7 @@ function formatParticipantValue(value) {
   if (typeof value === 'object') {
     if (value.id) {
       const mention = `<@${value.id}>`;
-      return value.tag ? `${mention} (${value.displayName})` : mention;
+      return value.tag ? `${mention} (${value.tag})` : mention;
     }
     if (value.mention) return value.mention;
     if (value.name) return value.name;

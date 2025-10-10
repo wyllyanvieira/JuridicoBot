@@ -29,7 +29,7 @@ client.on("clientReady", () => {
     }
   });
 
-  console.log(chalk.blue(`${client.user.username} online!`));
+  console.log(chalk.blue(`${client.user.tag} online!`));
   const forum = client.guilds.cache.get(
                 cfg.forums.instance2
               );

@@ -251,7 +251,7 @@ client.on("interactionCreate", async (interaction) => {
           const l = new EmbedBuilder()
             .setTitle("AUDIT: Novo processo")
             .setDescription(
-              `${caseNumber} criado por ${interaction.user.displayName} (${interaction.user.id})`
+              `${caseNumber} criado por ${interaction.user.tag} (${interaction.user.id})`
             )
             .addFields(
               { name: "Título", value: title },
@@ -716,7 +716,7 @@ client.on("interactionCreate", async (interaction) => {
             }
           )
           .setTimestamp()
-          .setFooter({ text: `Emitido por ${interaction.user.displayName}` });
+          .setFooter({ text: `Emitido por ${interaction.user.tag }` });
 
         await guildChannel.send({ embeds: [embed] }).catch((err) => {
           console.error("send intimation error", err);
