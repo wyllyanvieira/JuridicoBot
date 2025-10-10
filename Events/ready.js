@@ -4,7 +4,7 @@ const sqlite3 = require('sqlite3').verbose();
 const chalk = require('chalk');
 const scheduler = require('../lib/scheduler');
 const {all} = require('../lib/db.js');
-
+const cfg = require('../config.json');
 const processosNumber = all.length;
 
 const activities_list = [
@@ -30,7 +30,10 @@ client.on("clientReady", () => {
   });
 
   console.log(chalk.blue(`${client.user.username} online!`));
-  
+  const forum = client.guilds.cache.get(
+                cfg.forums.instance2
+              );
+              console.log(forum);
   // start scheduler
   try {
     scheduler.start(client).catch(() => null);

@@ -136,6 +136,7 @@ client.on("interactionCreate", async (interaction) => {
 
         // find forum channel by ID from config; prefer instance-specific forum if available
         let forum = null;
+        console.log(forum);
         try {
           const cfg = require("../config.json");
           if (cfg && cfg.forums) {
@@ -151,6 +152,7 @@ client.on("interactionCreate", async (interaction) => {
               forum = interaction.guild.channels.cache.get(
                 cfg.forums.instance3
               );
+
             // fallback to main
             if (!forum && cfg.forums.main)
               forum = interaction.guild.channels.cache.get(cfg.forums.main);
@@ -634,7 +636,10 @@ client.on("interactionCreate", async (interaction) => {
             ephemeral: true,
           });
 
-        if (!isJudgeOfCase(caseRow, interaction.user.id) && !roles.memberHasRoleByKey(interaction.member, "admin")) {
+        if (
+          !isJudgeOfCase(caseRow, interaction.user.id) &&
+          !roles.memberHasRoleByKey(interaction.member, "admin")
+        ) {
           return interaction.reply({
             content: "`❌` | Você não é o Juiz responsável por este processo.",
             ephemeral: true,
@@ -643,13 +648,18 @@ client.on("interactionCreate", async (interaction) => {
 
         await interaction.deferReply({ ephemeral: true });
 
-        const intimado = interaction.fields.getTextInputValue("intimation_target");
-        const motivo = interaction.fields.getTextInputValue("intimation_reason");
-        const prazoRaw = interaction.fields.getTextInputValue("intimation_deadline");
+        const intimado =
+          interaction.fields.getTextInputValue("intimation_target");
+        const motivo =
+          interaction.fields.getTextInputValue("intimation_reason");
+        const prazoRaw = interaction.fields.getTextInputValue(
+          "intimation_deadline"
+        );
         const prazo = parseInt(prazoRaw, 10);
         if (!Number.isInteger(prazo) || prazo <= 0) {
           return interaction.editReply({
-            content: "`⚠️` | Informe um prazo válido em dias (número inteiro positivo).",
+            content:
+              "`⚠️` | Informe um prazo válido em dias (número inteiro positivo).",
           });
         }
 
@@ -686,9 +696,17 @@ client.on("interactionCreate", async (interaction) => {
           .setTitle("📨 Intimação Judicial")
           .setColor("#f1c40f")
           .addFields(
-            { name: "Processo", value: `**${caseRow.case_number}**`, inline: true },
+            {
+              name: "Processo",
+              value: `**${caseRow.case_number}**`,
+              inline: true,
+            },
             { name: "Prazo", value: `${prazo} dia(s)`, inline: true },
-            { name: "Data limite", value: limite.toLocaleDateString(), inline: true },
+            {
+              name: "Data limite",
+              value: limite.toLocaleDateString(),
+              inline: true,
+            },
             { name: "Intimado", value: intimado, inline: false },
             { name: "Motivo", value: motivo, inline: false },
             {
@@ -700,11 +718,9 @@ client.on("interactionCreate", async (interaction) => {
           .setTimestamp()
           .setFooter({ text: `Emitido por ${interaction.user.displayName}` });
 
-        await guildChannel
-          .send({ embeds: [embed] })
-          .catch((err) => {
-            console.error("send intimation error", err);
-          });
+        await guildChannel.send({ embeds: [embed] }).catch((err) => {
+          console.error("send intimation error", err);
+        });
 
         const timeline = (() => {
           try {
@@ -763,7 +779,10 @@ client.on("interactionCreate", async (interaction) => {
             ephemeral: true,
           });
 
-        if (!isJudgeOfCase(caseRow, interaction.user.id) && !roles.memberHasRoleByKey(interaction.member, "admin")) {
+        if (
+          !isJudgeOfCase(caseRow, interaction.user.id) &&
+          !roles.memberHasRoleByKey(interaction.member, "admin")
+        ) {
           return interaction.reply({
             content: "`❌` | Você não é o Juiz responsável por este processo.",
             ephemeral: true,
@@ -772,24 +791,38 @@ client.on("interactionCreate", async (interaction) => {
 
         await interaction.deferReply({ ephemeral: true });
 
-        const tipo = interaction.fields.getTextInputValue("hearing_type") || "Audiência";
+        const tipo =
+          interaction.fields.getTextInputValue("hearing_type") || "Audiência";
         const dataRaw = interaction.fields.getTextInputValue("hearing_date");
         const horaRaw = interaction.fields.getTextInputValue("hearing_time");
-        const local = interaction.fields.getTextInputValue("hearing_location") || "—";
+        const local =
+          interaction.fields.getTextInputValue("hearing_location") || "—";
 
-        const [dia, mes, ano] = dataRaw.split(/[\/-]/).map((v) => parseInt(v.trim(), 10));
-        const [hora, minuto] = horaRaw.split(":").map((v) => parseInt(v.trim(), 10));
+        const [dia, mes, ano] = dataRaw
+          .split(/[\/-]/)
+          .map((v) => parseInt(v.trim(), 10));
+        const [hora, minuto] = horaRaw
+          .split(":")
+          .map((v) => parseInt(v.trim(), 10));
 
-        if (!ano || !mes || !dia || typeof hora !== "number" || typeof minuto !== "number") {
+        if (
+          !ano ||
+          !mes ||
+          !dia ||
+          typeof hora !== "number" ||
+          typeof minuto !== "number"
+        ) {
           return interaction.editReply({
-            content: "`⚠️` | Informe data e horário válidos no formato solicitado.",
+            content:
+              "`⚠️` | Informe data e horário válidos no formato solicitado.",
           });
         }
 
         const when = new Date(Date.UTC(ano, mes - 1, dia, hora, minuto));
         if (Number.isNaN(when.getTime())) {
           return interaction.editReply({
-            content: "`⚠️` | Não foi possível interpretar a data/horário informados.",
+            content:
+              "`⚠️` | Não foi possível interpretar a data/horário informados.",
           });
         }
 
@@ -852,7 +885,9 @@ client.on("interactionCreate", async (interaction) => {
         } catch (e) {}
         const hearingChannelId = config.channels?.hearings;
         const hearingChannel = hearingChannelId
-          ? await interaction.guild.channels.fetch(hearingChannelId).catch(() => null)
+          ? await interaction.guild.channels
+              .fetch(hearingChannelId)
+              .catch(() => null)
           : null;
 
         const parties = metadata.parties || {};
@@ -881,7 +916,8 @@ client.on("interactionCreate", async (interaction) => {
         }
 
         return interaction.editReply({
-          content: "`✅` | Audiência/Julgamento agendado e publicado com sucesso.",
+          content:
+            "`✅` | Audiência/Julgamento agendado e publicado com sucesso.",
         });
       }
 
@@ -894,7 +930,10 @@ client.on("interactionCreate", async (interaction) => {
             ephemeral: true,
           });
 
-        if (!isJudgeOfCase(caseRow, interaction.user.id) && !roles.memberHasRoleByKey(interaction.member, "admin")) {
+        if (
+          !isJudgeOfCase(caseRow, interaction.user.id) &&
+          !roles.memberHasRoleByKey(interaction.member, "admin")
+        ) {
           return interaction.reply({
             content: "`❌` | Você não é o Juiz responsável por este processo.",
             ephemeral: true,
@@ -911,10 +950,14 @@ client.on("interactionCreate", async (interaction) => {
           return { name, stateId };
         };
 
-        const activeField = interaction.fields.getTextInputValue("case_edit_active");
-        const passiveField = interaction.fields.getTextInputValue("case_edit_passive");
-        const typeField = interaction.fields.getTextInputValue("case_edit_type");
-        const statusField = interaction.fields.getTextInputValue("case_edit_status");
+        const activeField =
+          interaction.fields.getTextInputValue("case_edit_active");
+        const passiveField =
+          interaction.fields.getTextInputValue("case_edit_passive");
+        const typeField =
+          interaction.fields.getTextInputValue("case_edit_type");
+        const statusField =
+          interaction.fields.getTextInputValue("case_edit_status");
 
         if (!activeField?.trim() || !passiveField?.trim()) {
           return interaction.editReply({
@@ -980,7 +1023,8 @@ client.on("interactionCreate", async (interaction) => {
             await updatePanelMessage(thread, updated);
             await thread
               .send({
-                content: "✏️ As informações principais do processo foram atualizadas pelo Juiz.",
+                content:
+                  "✏️ As informações principais do processo foram atualizadas pelo Juiz.",
               })
               .catch(() => null);
           }
@@ -1100,7 +1144,8 @@ client.on("interactionCreate", async (interaction) => {
         if (action === "alter_instance") {
           if (caseRow.instance >= 2) {
             return interaction.reply({
-              content: "`⚠️` | Este processo já está na 2ª instância ou superior.",
+              content:
+                "`⚠️` | Este processo já está na 2ª instância ou superior.",
               ephemeral: true,
             });
           }
@@ -1117,14 +1162,14 @@ client.on("interactionCreate", async (interaction) => {
               interaction.user,
               { customMessage: promotionMessage, includeActorMention: true }
             );
-            await interaction.send({
-              content: `\`✅\` | ${caseRow.title} promovido para a 2ª instância.`,
-            });
+            //await interaction.send({
+            //  content: `\`✅\` | ${caseRow.title} promovido para a 2ª instância.`,
+            //});
           } catch (err) {
             console.error("alter_instance error", err);
-            await interaction.send({
-              content: `\`❌\` | Não foi possível promover o ${caseRow.title} para a próxima instância. Verifique com a administração e tente novamente.`,
-            });
+            //await interaction.send({
+            //  content: `\`❌\` | Não foi possível promover o ${caseRow.title} para a próxima instância. Verifique com a administração e tente novamente.`,
+            //});
           }
           return;
         }
@@ -1813,7 +1858,8 @@ client.on("interactionCreate", async (interaction) => {
             const activeMention =
               formatParticipantDisplay(authorEntry) || "Defensor do Polo Ativo";
             const passiveMention =
-              formatParticipantDisplay(passiveEntry) || "Defensor do Polo Passivo";
+              formatParticipantDisplay(passiveEntry) ||
+              "Defensor do Polo Passivo";
             await thread
               .send({
                 content: `\`✅\` |  ${judgeMention}, ${activeMention} e ${passiveMention}, todas as partes estão habilitadas. Polo Ativo, por favor, protocole a Petição Inicial para dar sequência ao processo.`,
