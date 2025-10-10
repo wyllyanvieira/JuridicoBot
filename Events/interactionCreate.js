@@ -41,6 +41,32 @@ async function loadJudgeCases(userId) {
   return filterCasesByJudge(rows, userId);
 }
 
+function extractParticipantId(entry) {
+  if (!entry) return null;
+  if (typeof entry === "object") {
+    if (entry.id) return String(entry.id);
+    if (entry.userId) return String(entry.userId);
+    if (entry.mention) {
+      const match = entry.mention.match(/\d{5,}/);
+      if (match) return match[0];
+    }
+  }
+  if (typeof entry === "string") {
+    const mentionMatch = entry.match(/\d{5,}/);
+    if (mentionMatch) return mentionMatch[0];
+    return entry;
+  }
+  return null;
+}
+
+function isJudgeOfCase(caseRow, userId) {
+  if (!caseRow || !userId) return false;
+  const participants = parseParticipants(caseRow.participants);
+  const judge = participants?.judge;
+  const judgeId = extractParticipantId(judge);
+  return judgeId ? judgeId === String(userId) : false;
+}
+
 client.on("interactionCreate", async (interaction) => {
   // Modal submissions (case creation and hearing creation)
   if (interaction.isModalSubmit && interaction.isModalSubmit()) {
@@ -599,6 +625,372 @@ client.on("interactionCreate", async (interaction) => {
         });
       }
 
+      if (interaction.customId.startsWith("intimation_modal_")) {
+        const caseId = parseInt(interaction.customId.split("_").pop());
+        const caseRow = await db.getCaseById(caseId);
+        if (!caseRow)
+          return interaction.reply({
+            content: "`❌` | Processo não encontrado.",
+            ephemeral: true,
+          });
+
+        if (!isJudgeOfCase(caseRow, interaction.user.id) && !roles.memberHasRoleByKey(interaction.member, "admin")) {
+          return interaction.reply({
+            content: "`❌` | Você não é o Juiz responsável por este processo.",
+            ephemeral: true,
+          });
+        }
+
+        await interaction.deferReply({ ephemeral: true });
+
+        const intimado = interaction.fields.getTextInputValue("intimation_target");
+        const motivo = interaction.fields.getTextInputValue("intimation_reason");
+        const prazoRaw = interaction.fields.getTextInputValue("intimation_deadline");
+        const prazo = parseInt(prazoRaw, 10);
+        if (!Number.isInteger(prazo) || prazo <= 0) {
+          return interaction.editReply({
+            content: "`⚠️` | Informe um prazo válido em dias (número inteiro positivo).",
+          });
+        }
+
+        let config = {};
+        try {
+          config = require("../config.json");
+        } catch (e) {}
+
+        const channelId = config.channels?.intimations;
+        const guildChannel = channelId
+          ? await interaction.guild.channels.fetch(channelId).catch(() => null)
+          : null;
+
+        if (!guildChannel) {
+          return interaction.editReply({
+            content:
+              "`❌` | Canal de intimações não configurado ou inacessível. Ajuste `channels.intimations` no config.json.",
+          });
+        }
+
+        const metadata = (() => {
+          try {
+            return JSON.parse(caseRow.metadata || "{}");
+          } catch (e) {
+            return {};
+          }
+        })();
+        const parties = metadata.parties || {};
+        const ativo = parties.active?.name || "—";
+        const passivo = parties.passive?.name || "—";
+
+        const limite = new Date(Date.now() + prazo * 24 * 60 * 60 * 1000);
+        const embed = new EmbedBuilder()
+          .setTitle("📨 Intimação Judicial")
+          .setColor("#f1c40f")
+          .addFields(
+            { name: "Processo", value: `**${caseRow.case_number}**`, inline: true },
+            { name: "Prazo", value: `${prazo} dia(s)`, inline: true },
+            { name: "Data limite", value: limite.toLocaleDateString(), inline: true },
+            { name: "Intimado", value: intimado, inline: false },
+            { name: "Motivo", value: motivo, inline: false },
+            {
+              name: "Partes",
+              value: `Autor: ${ativo}\nRéu: ${passivo}`,
+              inline: false,
+            }
+          )
+          .setTimestamp()
+          .setFooter({ text: `Emitido por ${interaction.user.tag}` });
+
+        await guildChannel
+          .send({ embeds: [embed] })
+          .catch((err) => {
+            console.error("send intimation error", err);
+          });
+
+        const timeline = (() => {
+          try {
+            return JSON.parse(caseRow.timeline || "[]");
+          } catch (e) {
+            return [];
+          }
+        })();
+        const now = new Date().toISOString();
+        timeline.push({
+          action: "intimation_issued",
+          at: now,
+          by: interaction.user.id,
+          target: intimado,
+          deadline_days: prazo,
+        });
+
+        await db.updateCase(caseRow.id, { timeline });
+        await db.addLog(
+          caseRow.id,
+          "intimation_issued",
+          interaction.user.id,
+          interaction.user.tag,
+          `Intimado ${intimado} com prazo de ${prazo} dia(s)`
+        );
+        await audit.logAction(
+          interaction.guild,
+          caseRow.id,
+          "intimation_issued",
+          interaction.user,
+          `Intimação enviada para ${intimado}`
+        );
+
+        if (caseRow.thread_id) {
+          const thread = await interaction.guild.channels
+            .fetch(String(caseRow.thread_id))
+            .catch(() => null);
+          thread
+            ?.send({
+              content: `📨 Uma intimação foi emitida para **${intimado}** com prazo de ${prazo} dia(s).`,
+            })
+            .catch(() => null);
+        }
+
+        return interaction.editReply({
+          content: "`✅` | Intimação emitida e registrada com sucesso.",
+        });
+      }
+
+      if (interaction.customId.startsWith("hearing_quick_modal_")) {
+        const caseId = parseInt(interaction.customId.split("_").pop());
+        const caseRow = await db.getCaseById(caseId);
+        if (!caseRow)
+          return interaction.reply({
+            content: "`❌` | Processo não encontrado.",
+            ephemeral: true,
+          });
+
+        if (!isJudgeOfCase(caseRow, interaction.user.id) && !roles.memberHasRoleByKey(interaction.member, "admin")) {
+          return interaction.reply({
+            content: "`❌` | Você não é o Juiz responsável por este processo.",
+            ephemeral: true,
+          });
+        }
+
+        await interaction.deferReply({ ephemeral: true });
+
+        const tipo = interaction.fields.getTextInputValue("hearing_type") || "Audiência";
+        const dataRaw = interaction.fields.getTextInputValue("hearing_date");
+        const horaRaw = interaction.fields.getTextInputValue("hearing_time");
+        const local = interaction.fields.getTextInputValue("hearing_location") || "—";
+
+        const [dia, mes, ano] = dataRaw.split(/[\/-]/).map((v) => parseInt(v.trim(), 10));
+        const [hora, minuto] = horaRaw.split(":").map((v) => parseInt(v.trim(), 10));
+
+        if (!ano || !mes || !dia || typeof hora !== "number" || typeof minuto !== "number") {
+          return interaction.editReply({
+            content: "`⚠️` | Informe data e horário válidos no formato solicitado.",
+          });
+        }
+
+        const when = new Date(Date.UTC(ano, mes - 1, dia, hora, minuto));
+        if (Number.isNaN(when.getTime())) {
+          return interaction.editReply({
+            content: "`⚠️` | Não foi possível interpretar a data/horário informados.",
+          });
+        }
+
+        const metadata = (() => {
+          try {
+            return JSON.parse(caseRow.metadata || "{}");
+          } catch (e) {
+            return {};
+          }
+        })();
+        metadata.next_hearing = when.toISOString();
+        metadata.next_hearing_label = tipo;
+
+        const timeline = (() => {
+          try {
+            return JSON.parse(caseRow.timeline || "[]");
+          } catch (e) {
+            return [];
+          }
+        })();
+        const now = new Date().toISOString();
+        timeline.push({
+          action: "hearing_scheduled",
+          at: now,
+          when: when.toISOString(),
+          type: tipo,
+          by: interaction.user.id,
+        });
+
+        const hearing = await db.addHearing(caseRow.id, {
+          hearing_at: when.toISOString(),
+          duration_minutes: 60,
+          location: local,
+          created_by: `${interaction.user.tag} (${interaction.user.id})`,
+        });
+
+        await db.updateCase(caseRow.id, {
+          metadata,
+          timeline,
+        });
+        await db.addLog(
+          caseRow.id,
+          "hearing_scheduled",
+          interaction.user.id,
+          interaction.user.tag,
+          `${tipo} marcada para ${when.toISOString()} em ${local}`
+        );
+        await audit.logAction(
+          interaction.guild,
+          caseRow.id,
+          "hearing_scheduled",
+          interaction.user,
+          `${tipo} marcada para ${when.toLocaleString()}`
+        );
+        scheduler.scheduleHearing(client, hearing).catch(() => null);
+
+        let config = {};
+        try {
+          config = require("../config.json");
+        } catch (e) {}
+        const hearingChannelId = config.channels?.hearings;
+        const hearingChannel = hearingChannelId
+          ? await interaction.guild.channels.fetch(hearingChannelId).catch(() => null)
+          : null;
+
+        const parties = metadata.parties || {};
+        const ativo = parties.active?.name || "—";
+        const passivo = parties.passive?.name || "—";
+        const message =
+          `📅 **${tipo} marcada**\n` +
+          `> Processo: **${caseRow.case_number}**\n` +
+          `> Partes: ${ativo} x ${passivo}\n` +
+          `> Data: ${dia.toString().padStart(2, "0")}/${mes
+            .toString()
+            .padStart(2, "0")}/${ano} às ${horaRaw}\n` +
+          `> Local: ${local}`;
+
+        await hearingChannel?.send({ content: message }).catch(() => null);
+
+        if (caseRow.thread_id) {
+          const thread = await interaction.guild.channels
+            .fetch(String(caseRow.thread_id))
+            .catch(() => null);
+          await thread
+            ?.send({
+              content: `📅 ${tipo} agendada para ${when.toLocaleString()} em ${local}.`,
+            })
+            .catch(() => null);
+        }
+
+        return interaction.editReply({
+          content: "`✅` | Audiência/Julgamento agendado e publicado com sucesso.",
+        });
+      }
+
+      if (interaction.customId.startsWith("case_edit_modal_")) {
+        const caseId = parseInt(interaction.customId.split("_").pop());
+        const caseRow = await db.getCaseById(caseId);
+        if (!caseRow)
+          return interaction.reply({
+            content: "`❌` | Processo não encontrado.",
+            ephemeral: true,
+          });
+
+        if (!isJudgeOfCase(caseRow, interaction.user.id) && !roles.memberHasRoleByKey(interaction.member, "admin")) {
+          return interaction.reply({
+            content: "`❌` | Você não é o Juiz responsável por este processo.",
+            ephemeral: true,
+          });
+        }
+
+        await interaction.deferReply({ ephemeral: true });
+
+        const parsePartyField = (raw) => {
+          if (!raw) return { name: "", stateId: "" };
+          const parts = raw.split("|");
+          const name = parts[0]?.trim() || "";
+          const stateId = parts[1]?.trim() || "";
+          return { name, stateId };
+        };
+
+        const activeField = interaction.fields.getTextInputValue("case_edit_active");
+        const passiveField = interaction.fields.getTextInputValue("case_edit_passive");
+        const typeField = interaction.fields.getTextInputValue("case_edit_type");
+        const statusField = interaction.fields.getTextInputValue("case_edit_status");
+
+        if (!activeField?.trim() || !passiveField?.trim()) {
+          return interaction.editReply({
+            content: "`⚠️` | Informe os dados completos das partes.",
+          });
+        }
+
+        const metadata = (() => {
+          try {
+            return JSON.parse(caseRow.metadata || "{}");
+          } catch (e) {
+            return {};
+          }
+        })();
+        metadata.parties = metadata.parties || { active: {}, passive: {} };
+        metadata.parties.active = parsePartyField(activeField);
+        metadata.parties.passive = parsePartyField(passiveField);
+        metadata.type = typeField;
+
+        const timeline = (() => {
+          try {
+            return JSON.parse(caseRow.timeline || "[]");
+          } catch (e) {
+            return [];
+          }
+        })();
+        const now = new Date().toISOString();
+        timeline.push({
+          action: "case_updated",
+          at: now,
+          by: interaction.user.id,
+        });
+
+        const partiesDisplay = buildPartiesDisplay(metadata, []);
+        const updated = await db.updateCase(caseRow.id, {
+          type: typeField,
+          status: statusField,
+          metadata,
+          parties: partiesDisplay,
+          timeline,
+        });
+
+        await db.addLog(
+          caseRow.id,
+          "case_updated",
+          interaction.user.id,
+          interaction.user.tag,
+          "Dados do processo atualizados via painel do Juiz"
+        );
+        await audit.logAction(
+          interaction.guild,
+          caseRow.id,
+          "case_updated",
+          interaction.user,
+          "Dados principais do processo atualizados"
+        );
+
+        if (caseRow.thread_id) {
+          const thread = await interaction.guild.channels
+            .fetch(String(caseRow.thread_id))
+            .catch(() => null);
+          if (thread) {
+            await updatePanelMessage(thread, updated);
+            await thread
+              .send({
+                content: "✏️ As informações principais do processo foram atualizadas pelo Juiz.",
+              })
+              .catch(() => null);
+          }
+        }
+
+        return interaction.editReply({
+          content: "`✅` | Informações do processo atualizadas com sucesso.",
+        });
+      }
+
       if (interaction.customId === "hearing_create_modal") {
         const whenRaw = interaction.fields.getTextInputValue("hearing_when");
         const durationRaw =
@@ -684,6 +1076,212 @@ client.on("interactionCreate", async (interaction) => {
     try {
       const id = interaction.customId;
       // Suporte ao painel do juiz via select menu
+      if (id.startsWith("case_actions_")) {
+        const caseId = parseInt(id.replace("case_actions_", ""), 10);
+        const caseRow = await db.getCaseById(caseId);
+        if (!caseRow) {
+          return interaction.reply({
+            content: "`❌` | Processo não encontrado.",
+            ephemeral: true,
+          });
+        }
+
+        const isAssignedJudge = isJudgeOfCase(caseRow, interaction.user.id);
+        const isAdmin = roles.memberHasRoleByKey(interaction.member, "admin");
+        if (!isAssignedJudge && !isAdmin) {
+          return interaction.reply({
+            content:
+              "`❌` | Apenas o Juiz responsável por este processo pode usar este menu.",
+            ephemeral: true,
+          });
+        }
+
+        const action = interaction.values[0];
+        if (action === "alter_instance") {
+          if (caseRow.instance >= 2) {
+            return interaction.reply({
+              content: "`⚠️` | Este processo já está na 2ª instância ou superior.",
+              ephemeral: true,
+            });
+          }
+
+          await interaction.deferReply({ ephemeral: true });
+          try {
+            const promotionMessage =
+              `⚖️ O Juiz <@${interaction.user.id}> promoveu este processo à 2ª instância.\n` +
+              "O processo seguirá com as mesmas informações e sistemas nesta instância.";
+            await caseActions.escalateCase(
+              caseRow,
+              2,
+              client,
+              interaction.user,
+              { customMessage: promotionMessage, includeActorMention: true }
+            );
+            await interaction.editReply({
+              content: "`✅` | Processo promovido para a 2ª instância.",
+            });
+          } catch (err) {
+            console.error("alter_instance error", err);
+            await interaction.editReply({
+              content: "`❌` | Não foi possível promover o processo.",
+            });
+          }
+          return;
+        }
+
+        if (action === "emit_intimation") {
+          const modal = new ModalBuilder()
+            .setCustomId(`intimation_modal_${caseRow.id}`)
+            .setTitle("Emitir Intimação");
+
+          const targetInput = new TextInputBuilder()
+            .setCustomId("intimation_target")
+            .setLabel("Intimado (Nome | ID)")
+            .setPlaceholder("Nome Sobrenome | 12345")
+            .setStyle(TextInputStyle.Short)
+            .setRequired(true)
+            .setMaxLength(150);
+
+          const reasonInput = new TextInputBuilder()
+            .setCustomId("intimation_reason")
+            .setLabel("Motivo da Intimação")
+            .setStyle(TextInputStyle.Paragraph)
+            .setRequired(true)
+            .setMaxLength(500);
+
+          const deadlineInput = new TextInputBuilder()
+            .setCustomId("intimation_deadline")
+            .setLabel("Prazo para cumprimento (dias)")
+            .setStyle(TextInputStyle.Short)
+            .setRequired(true)
+            .setPlaceholder("5");
+
+          modal.addComponents(
+            new ActionRowBuilder().addComponents(targetInput),
+            new ActionRowBuilder().addComponents(reasonInput),
+            new ActionRowBuilder().addComponents(deadlineInput)
+          );
+
+          return interaction.showModal(modal);
+        }
+
+        if (action === "schedule_hearing") {
+          const modal = new ModalBuilder()
+            .setCustomId(`hearing_quick_modal_${caseRow.id}`)
+            .setTitle("Agendar Audiência/Julgamento");
+
+          const typeInput = new TextInputBuilder()
+            .setCustomId("hearing_type")
+            .setLabel("Tipo (Audiência/Julgamento)")
+            .setStyle(TextInputStyle.Short)
+            .setRequired(true)
+            .setMaxLength(100)
+            .setValue("Audiência");
+
+          const dateInput = new TextInputBuilder()
+            .setCustomId("hearing_date")
+            .setLabel("Data (DD/MM/AAAA)")
+            .setStyle(TextInputStyle.Short)
+            .setRequired(true)
+            .setPlaceholder("25/12/2024");
+
+          const timeInput = new TextInputBuilder()
+            .setCustomId("hearing_time")
+            .setLabel("Horário (HH:MM)")
+            .setStyle(TextInputStyle.Short)
+            .setRequired(true)
+            .setPlaceholder("14:30");
+
+          const locationInput = new TextInputBuilder()
+            .setCustomId("hearing_location")
+            .setLabel("Local da audiência")
+            .setStyle(TextInputStyle.Short)
+            .setRequired(false)
+            .setPlaceholder("Tribunal do Júri");
+
+          modal.addComponents(
+            new ActionRowBuilder().addComponents(typeInput),
+            new ActionRowBuilder().addComponents(dateInput),
+            new ActionRowBuilder().addComponents(timeInput),
+            new ActionRowBuilder().addComponents(locationInput)
+          );
+
+          return interaction.showModal(modal);
+        }
+
+        if (action === "edit_case") {
+          const metadata = (() => {
+            try {
+              return JSON.parse(caseRow.metadata || "{}");
+            } catch (e) {
+              return {};
+            }
+          })();
+          const parties = metadata.parties || {
+            active: { name: "", stateId: "" },
+            passive: { name: "", stateId: "" },
+          };
+
+          const activeValue = [
+            parties.active?.name || "",
+            parties.active?.stateId || "",
+          ]
+            .filter(Boolean)
+            .join(" | ");
+          const passiveValue = [
+            parties.passive?.name || "",
+            parties.passive?.stateId || "",
+          ]
+            .filter(Boolean)
+            .join(" | ");
+
+          const modal = new ModalBuilder()
+            .setCustomId(`case_edit_modal_${caseRow.id}`)
+            .setTitle("Editar Informações do Processo");
+
+          const activeInput = new TextInputBuilder()
+            .setCustomId("case_edit_active")
+            .setLabel("Polo Ativo (Nome | State ID)")
+            .setStyle(TextInputStyle.Short)
+            .setRequired(true);
+          if (activeValue) activeInput.setValue(activeValue);
+
+          const passiveInput = new TextInputBuilder()
+            .setCustomId("case_edit_passive")
+            .setLabel("Polo Passivo (Nome | State ID)")
+            .setStyle(TextInputStyle.Short)
+            .setRequired(true);
+          if (passiveValue) passiveInput.setValue(passiveValue);
+
+          const typePrefill = caseRow.type || metadata.type || "";
+          const typeInput = new TextInputBuilder()
+            .setCustomId("case_edit_type")
+            .setLabel("Tipo do Processo")
+            .setStyle(TextInputStyle.Short)
+            .setRequired(true);
+          if (typePrefill) typeInput.setValue(typePrefill);
+
+          const statusPrefill = caseRow.status || "Ativo";
+          const statusInput = new TextInputBuilder()
+            .setCustomId("case_edit_status")
+            .setLabel("Status do Processo")
+            .setStyle(TextInputStyle.Short)
+            .setRequired(true)
+            .setValue(statusPrefill);
+
+          modal.addComponents(
+            new ActionRowBuilder().addComponents(activeInput),
+            new ActionRowBuilder().addComponents(passiveInput),
+            new ActionRowBuilder().addComponents(typeInput),
+            new ActionRowBuilder().addComponents(statusInput)
+          );
+
+          return interaction.showModal(modal);
+        }
+
+        return interaction.deferUpdate().catch(() => null);
+      }
+
       if (id.startsWith("judge_panel_")) {
         const segments = id.split(":");
         const root = segments[0];

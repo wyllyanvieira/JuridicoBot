@@ -8,7 +8,9 @@
   },
   "channels": {
     "movements": "1425824194561572986",
-    "audit": "1424807107659567104"
+    "audit": "1424807107659567104",
+    "intimations": null,
+    "hearings": null
   },
   "roles": {
     "judge": "1369493539624456222",
