@@ -13,27 +13,6 @@ try {
 	// ignore
 }
 
-// Helper: verifica se membro possui role configurado em config.roles[roleKey]
-function memberHasRoleByKey(member, roleKey) {
-	if (!member || !member.roles) return false;
-	try {
-		const roleConfig = config.roles && config.roles[roleKey];
-		if (roleConfig) {
-			const ids = Array.isArray(roleConfig) ? roleConfig : [roleConfig];
-			for (const id of ids) {
-				if (member.roles.cache.has(id)) return true;
-			}
-		}
-		// fallback: try by name (PT)
-		const mapping = { judge: 'Juiz', prosecutor: 'Promotor', defender: 'Defensor', admin: 'Administrador' };
-		const roleName = mapping[roleKey];
-		if (roleName && member.guild && member.guild.roles) {
-			const role = member.guild.roles.cache.find(r => r.name.toLowerCase() === roleName.toLowerCase());
-			if (role) return member.roles.cache.has(role.id);
-		}
-	} catch (e) {}
-	return false;
-}
 
 // Discord client
 const client = new Client({
@@ -63,7 +42,7 @@ try {
 const app = express();
 app.use(express.json());
 
-const API_KEY = (config && config.apiKey) || process.env.API_KEY || null;
+const API_KEY = (config && config.apiKey) || "DOJSYSTEMKEYAUTH";
 
 function requireApiKey(req, res, next) {
 	if (!API_KEY) return res.status(500).json({ error: 'API key not configured on server' });
