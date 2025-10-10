@@ -3,17 +3,14 @@ const ms = require('ms');
 const sqlite3 = require('sqlite3').verbose();
 const chalk = require('chalk');
 const scheduler = require('../lib/scheduler');
+const {all} = require('../lib/db.js');
 
-const processosNumber = randomInt(1, 100);
-
-function randomInt(min, max) {
-  return Math.floor(Math.random() * (max - min + 1)) + min;
-}
+const processosNumber = all.length;
 
 const activities_list = [
-  `Online em ${client.guilds.cache.size} servidores`,  
+  `Encontrou BUG? Reporte para ser corrijido!`,  
   `Gerenciando ${processosNumber} processos`,  
-  `Veja meus comandos Slash {/}`, 
+  `Desenvolvido por @wyllyan.br`, 
 ];
 
 client.on("clientReady", () => {

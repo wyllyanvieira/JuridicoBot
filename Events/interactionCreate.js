@@ -249,7 +249,7 @@ client.on("interactionCreate", async (interaction) => {
           const l = new EmbedBuilder()
             .setTitle("AUDIT: Novo processo")
             .setDescription(
-              `${caseNumber} criado por ${interaction.user.tag} (${interaction.user.id})`
+              `${caseNumber} criado por ${interaction.user.displayName} (${interaction.user.id})`
             )
             .addFields(
               { name: "Título", value: title },
@@ -693,12 +693,12 @@ client.on("interactionCreate", async (interaction) => {
             { name: "Motivo", value: motivo, inline: false },
             {
               name: "Partes",
-              value: `Autor: ${ativo}\nRéu: ${passivo}`,
+              value: `Polo Ativo: ${ativo}\nPolo Passivo: ${passivo}`,
               inline: false,
             }
           )
           .setTimestamp()
-          .setFooter({ text: `Emitido por ${interaction.user.tag}` });
+          .setFooter({ text: `Emitido por ${interaction.user.displayName}` });
 
         await guildChannel
           .send({ embeds: [embed] })
@@ -1117,13 +1117,13 @@ client.on("interactionCreate", async (interaction) => {
               interaction.user,
               { customMessage: promotionMessage, includeActorMention: true }
             );
-            await interaction.editReply({
-              content: "`✅` | Processo promovido para a 2ª instância.",
+            await interaction.send({
+              content: `\`✅\` | ${caseRow.title} promovido para a 2ª instância.`,
             });
           } catch (err) {
             console.error("alter_instance error", err);
-            await interaction.editReply({
-              content: "`❌` | Não foi possível promover o processo.",
+            await interaction.send({
+              content: `\`❌\` | Não foi possível promover o ${caseRow.title} para a próxima instância. Verifique com a administração e tente novamente.`,
             });
           }
           return;
@@ -1811,9 +1811,9 @@ client.on("interactionCreate", async (interaction) => {
             const passiveEntry = participants.passive;
             const judgeMention = formatParticipantDisplay(judgeEntry) || "Juiz";
             const activeMention =
-              formatParticipantDisplay(authorEntry) || "Advogado Polo Ativo";
+              formatParticipantDisplay(authorEntry) || "Defensor do Polo Ativo";
             const passiveMention =
-              formatParticipantDisplay(passiveEntry) || "Advogado Polo Passivo";
+              formatParticipantDisplay(passiveEntry) || "Defensor do Polo Passivo";
             await thread
               .send({
                 content: `\`✅\` |  ${judgeMention}, ${activeMention} e ${passiveMention}, todas as partes estão habilitadas. Polo Ativo, por favor, protocole a Petição Inicial para dar sequência ao processo.`,
